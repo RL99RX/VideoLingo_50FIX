@@ -1,203 +1,231 @@
-import os, sys
+import os
+import sys
 import platform
 import subprocess
+import shutil
+
+# 确保当前目录在 sys.path 中
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 ascii_logo = """
 __     ___     _            _     _                    
-\ \   / (_) __| | ___  ___ | |   (_)_ __   __ _  ___  
- \ \ / /| |/ _` |/ _ \/ _ \| |   | | '_ \ / _` |/ _ \ 
+\ \   / (_) __| | ___  ___ | |   (_)_ __   __ _  ___   
+ \ \ / /| |/ _` |/ _ \/ _ \| |   | | '_ \ / _` |/ _ \  
   \ V / | | (_| |  __/ (_) | |___| | | | | (_| | (_) |
-   \_/  |_|\__,_|\___|\___/|_____|_|_| |_|\__, |\___/ 
+   \_/  |_|\__,_|\___|\___/|_____|_|_| |_|\__, |\___/  
                                           |___/        
 """
 
-def install_package(*packages):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", *packages])
+def run_cmd(cmd, env=None, ignore_errors=False):
+    """封装subprocess调用"""
+    print(f"👉 Running: {' '.join(cmd)}")
+    try:
+        subprocess.check_call(cmd, env=env)
+    except subprocess.CalledProcessError as e:
+        if ignore_errors:
+            print(f"⚠️ Command failed but ignored: {e}")
+        else:
+            print(f"❌ Command failed: {e}")
+            raise e
+
+def install_package(*packages, index_url=None, no_deps=False, force=False):
+    """智能pip安装函数"""
+    cmd = [sys.executable, "-m", "pip", "install"]
+    if no_deps: cmd.append("--no-deps")
+    if force: cmd.append("--force-reinstall")
+    for pkg in packages:
+        cmd.append(pkg)
+    if index_url:
+        cmd.extend(["--index-url", index_url])
+    run_cmd(cmd)
+
+def uninstall_package(*packages):
+    """强制卸载包"""
+    cmd = [sys.executable, "-m", "pip", "uninstall", "-y"]
+    for pkg in packages:
+        cmd.append(pkg)
+    run_cmd(cmd, ignore_errors=True)
+
+def is_conda_env():
+    return os.path.exists(os.path.join(sys.prefix, 'conda-meta'))
+
+def check_system_ffmpeg():
+    """检查系统 FFmpeg"""
+    if not shutil.which("ffmpeg"): return False
+    try:
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+        if "conda" not in result.stdout.lower(): return True
+        return False
+    except: return False
+
+def remove_conda_ffmpeg():
+    """清理 Conda 的残废 FFmpeg"""
+    if platform.system() == "Windows":
+        conda_bin = os.path.join(sys.prefix, 'Library', 'bin')
+        for target in ["ffmpeg.exe", "ffplay.exe", "ffprobe.exe"]:
+            target_path = os.path.join(conda_bin, target)
+            if os.path.exists(target_path):
+                try:
+                    os.remove(target_path)
+                    print(f"🗑️ 已删除 Conda 自带文件: {target}")
+                except: pass
 
 def check_nvidia_gpu():
-    install_package("pynvml")
-    import pynvml
-    from translations.translations import translate as t
-    initialized = False
-    rtx50_detected = False
+    """检测GPU"""
     try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "nvidia-ml-py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        import pynvml
         pynvml.nvmlInit()
-        initialized = True
-        device_count = pynvml.nvmlDeviceGetCount()
-        if device_count > 0:
-            print(t("Detected NVIDIA GPU(s)"))
-            for i in range(device_count):
-                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                name = pynvml.nvmlDeviceGetName(handle)
-                print(f"GPU {i}: {name}")
-                # 检测RTX 50系列GPU
-                if any(rtx_model in name.upper() for rtx_model in ['RTX 5080', 'RTX 5090', 'RTX 5070']):
-                    rtx50_detected = True
-                    print(f"🔥 检测到RTX 50系列GPU: {name}")
-            return True, rtx50_detected
-        else:
-            print(t("No NVIDIA GPU detected"))
-            return False, False
-    except pynvml.NVMLError:
-        print(t("No NVIDIA GPU detected or NVIDIA drivers not properly installed"))
-        return False, False
-    finally:
-        if initialized:
-            pynvml.nvmlShutdown()
+        if pynvml.nvmlDeviceGetCount() > 0:
+            for i in range(pynvml.nvmlDeviceGetCount()):
+                name = pynvml.nvmlDeviceGetName(pynvml.nvmlDeviceGetHandleByIndex(i))
+                if "RTX 50" in name.upper():
+                    return True, True
+            return True, False
+    except: pass
+    return False, False
 
-def check_ffmpeg():
+def install_smart_requirements():
+    """读取 requirements.txt 并安装，但跳过核心冲突包"""
+    req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    if not os.path.exists(req_path): return
+
+    with open(req_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    safe_reqs = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"): continue
+        if "git+" in line: continue 
+        # 跳过核心冲突包，留给后面手动处理
+        if any(x in line.lower() for x in ["torch", "numpy", "av", "whisperx", "demucs", "spacy"]): 
+            continue 
+        safe_reqs.append(line)
+    
+    if safe_reqs:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as tmp:
+            tmp.write('\n'.join(safe_reqs))
+            tmp_path = tmp.name
+        try:
+            run_cmd([sys.executable, "-m", "pip", "install", "-r", tmp_path])
+        finally:
+            os.remove(tmp_path)
+
+ddef finalize_environment():
+    """【核心逻辑】执行最终的环境补全和定型"""
     from rich.console import Console
     from rich.panel import Panel
-    from translations.translations import translate as t
-    console = Console()
-
-    try:
-        # Check if ffmpeg is installed
-        subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        console.print(Panel(t("✅ FFmpeg is already installed"), style="green"))
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        system = platform.system()
-        install_cmd = ""
-        
-        if system == "Windows":
-            install_cmd = "choco install ffmpeg"
-            extra_note = t("Install Chocolatey first (https://chocolatey.org/)")
-        elif system == "Darwin":
-            install_cmd = "brew install ffmpeg"
-            extra_note = t("Install Homebrew first (https://brew.sh/)")
-        elif system == "Linux":
-            install_cmd = "sudo apt install ffmpeg  # Ubuntu/Debian\nsudo yum install ffmpeg  # CentOS/RHEL"
-            extra_note = t("Use your distribution's package manager")
-        
-        console.print(Panel.fit(
-            t("❌ FFmpeg not found\n\n") +
-            f"{t('🛠️ Install using:')}\n[bold cyan]{install_cmd}[/bold cyan]\n\n" +
-            f"{t('💡 Note:')}\n{extra_note}\n\n" +
-            f"{t('🔄 After installing FFmpeg, please run this installer again:')}\n[bold cyan]python install.py[/bold cyan]",
-            style="red"
-        ))
-        raise SystemExit(t("FFmpeg is required. Please install it and run the installer again."))
-
-def main():
-    install_package("requests", "rich", "ruamel.yaml", "InquirerPy")
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.box import DOUBLE
-    from InquirerPy import inquirer
-    from translations.translations import translate as t
-    from translations.translations import DISPLAY_LANGUAGES
-    from core.utils.config_utils import load_key, update_key
-    from core.utils.decorator import except_handler
-
     console = Console()
     
-    width = max(len(line) for line in ascii_logo.splitlines()) + 4
-    welcome_panel = Panel(
-        ascii_logo,
-        width=width,
-        box=DOUBLE,
-        title="[bold green]🌏[/bold green]",
-        border_style="bright_blue"
-    )
-    console.print(welcome_panel)
-    # Language selection
-    current_language = load_key("display_language")
-    # Find the display name for current language code
-    current_display = next((k for k, v in DISPLAY_LANGUAGES.items() if v == current_language), "🇬🇧 English")
-    selected_language = DISPLAY_LANGUAGES[inquirer.select(
-        message="Select language / 选择语言 / 選擇語言 / 言語を選択 / Seleccionar idioma / Sélectionner la langue / Выберите язык:",
-        choices=list(DISPLAY_LANGUAGES.keys()),
-        default=current_display
-    ).execute()]
-    update_key("display_language", selected_language)
+    console.print(Panel("🛡️ 执行最终环境定型 (Surgical Fix)...", style="magenta"))
+    
+    # 1. 暴力卸载 Numpy (确保干净)
+    console.print("正在清理 Numpy...")
+    uninstall_package("numpy")
+    
+    # 2. 强制安装兼容版 Numpy
+    console.print("正在强制锁定 Numpy < 2.0...")
+    install_package("numpy<2.0.0", force=True)
+    
+    # 3. 强制重装 Spacy 全家桶 (补上了 langcodes)
+    console.print("正在强制刷新 Spacy 生态...")
+    uninstall_package("spacy", "thinc", "srsly", "cymem", "preshed", "murmurhash", "blis", "wasabi", "weasel", "typer", "langcodes")
+    
+    spacy_family = [
+        "spacy==3.7.4", "thinc==8.2.3", "srsly==2.4.8", "cymem==2.0.8", 
+        "preshed==3.0.9", "murmurhash==1.0.10", "blis==0.7.11", 
+        "wasabi==1.1.2", "weasel==0.3.4", "typer", 
+        "langcodes", "language_data"  # <--- 本次新增
+    ]
+    
+    # 关键：使用 no_deps 防止它去动 PyTorch 或 Numpy
+    install_package(*spacy_family, no_deps=True, force=True)
+    
+    # 4. 补漏
+    install_package("matplotlib")
+    
+    # 5. 下载模型
+    subprocess.run([sys.executable, "-m", "spacy", "download", "zh_core_web_sm"])
+    
+    console.print("[green]✅ 环境修复完成！所有依赖已锁定。[/green]")
 
-    console.print(Panel.fit(t("🚀 Starting Installation"), style="bold magenta"))
+def install_core_dependencies():
+    from rich.console import Console
+    from rich.panel import Panel
+    console = Console()
 
-    # Configure mirrors
-    # add a check to ask user if they want to configure mirrors
-    if inquirer.confirm(
-        message=t("Do you need to auto-configure PyPI mirrors? (Recommended if you have difficulty accessing pypi.org)"),
-        default=True
-    ).execute():
+    # 0. 系统检查
+    if not check_system_ffmpeg():
+        console.print(Panel("❌ 未检测到系统 FFmpeg！请先运行: choco install ffmpeg-full -y", style="bold red"))
+        input("按 Enter 键继续...")
+
+    # 1. Conda 二进制依赖
+    if is_conda_env():
+        console.print(Panel("1. 安装 Conda 依赖...", style="cyan"))
+        try:
+            subprocess.check_call(["conda", "install", "av=11.0.0", "cudnn=8.9.7.29", "-c", "conda-forge", "-y"])
+            remove_conda_ffmpeg()
+            console.print("[green]✅ Conda 依赖安装成功[/green]")
+        except: pass
+
+    # 2. 预装 Numpy
+    install_package("numpy==1.26.4")
+
+    # 3. 安装 Git 包
+    console.print(Panel("2. 安装 WhisperX 和 Demucs...", style="cyan"))
+    install_package("git+https://github.com/m-bain/whisperx.git@7307306a9d8dd0d261e588cc933322454f853853")
+    install_package("git+https://github.com/adefossez/demucs.git")
+
+    # 4. 补全 requirements
+    console.print(Panel("3. 补全普通依赖...", style="cyan"))
+    install_smart_requirements()
+
+    # 5. 强制重装 PyTorch (50系特供)
+    has_gpu, is_rtx50 = check_nvidia_gpu()
+    if has_gpu and is_rtx50:
+        console.print(Panel("4. 🔥 RTX 50 detected! 强制重装 PyTorch Nightly...", style="red"))
+        install_package("torch", "torchvision", "torchaudio", 
+                      index_url="https://download.pytorch.org/whl/nightly/cu128", 
+                      force=True) 
+    elif has_gpu:
+        install_package("torch==2.0.0", "torchaudio==2.0.0", "torchvision", index_url="https://download.pytorch.org/whl/cu118")
+    else:
+        install_package("torch==2.1.2", "torchaudio==2.1.2", "torchvision")
+
+    # 6. 挂载项目
+    install_package("-e", ".", no_deps=True)
+    
+    # 7. 【最后一步】执行外科手术式修复
+    finalize_environment()
+
+def main():
+    try:
+        import rich
+        import requests
+        import ruamel.yaml
+        import InquirerPy
+    except ImportError:
+        install_package("requests", "rich", "ruamel.yaml", "InquirerPy")
+
+    from rich.console import Console
+    from rich.panel import Panel
+    from InquirerPy import inquirer
+    
+    console = Console()
+    console.print(Panel(ascii_logo, title="[bold green]VideoLingo Ultimate Installer (Surgical Fix)[/bold green]", border_style="bright_blue"))
+
+    if inquirer.confirm(message="Do you need to auto-configure PyPI mirrors?", default=False).execute():
         from core.utils.pypi_autochoose import main as choose_mirror
         choose_mirror()
 
-    # Detect system and GPU
-    has_gpu, is_rtx50 = False, False
-    if platform.system() != 'Darwin':
-        has_gpu, is_rtx50 = check_nvidia_gpu()
-    
-    if has_gpu:
-        if is_rtx50:
-            console.print(Panel("🔥 检测到RTX 50系列GPU，安装兼容的PyTorch nightly版本...", style="red"))
-            # 设置RTX 50系列兼容性环境变量
-            os.environ['TORCH_CUDA_ARCH_LIST'] = '7.0 7.5 8.0 8.6 8.9 9.0+PTX'
-            os.environ['NVIDIA_ALLOW_UNSUPPORTED_ARCHS'] = 'true'
-            # 先卸载可能存在的旧版本PyTorch
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "torch", "torchaudio", "-y"])
-            except:
-                pass
-            # 安装nightly版本
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--pre", "torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/nightly/cu128"])
-        else:
-            console.print(Panel(t("🎮 NVIDIA GPU detected, installing CUDA version of PyTorch..."), style="cyan"))
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.0.0", "torchaudio==2.0.0", "--index-url", "https://download.pytorch.org/whl/cu118"])
-    else:
-        system_name = "🍎 MacOS" if platform.system() == 'Darwin' else "💻 No NVIDIA GPU"
-        console.print(Panel(t(f"{system_name} detected, installing CPU version of PyTorch... Note: it might be slow during whisperX transcription."), style="cyan"))
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
-
-    @except_handler("Failed to install project")
-    def install_requirements():
-        console.print(Panel(t("Installing project in editable mode using `pip install -e .`"), style="cyan"))
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", "."], env={**os.environ, "PIP_NO_CACHE_DIR": "0", "PYTHONIOENCODING": "utf-8"})
-
-    @except_handler("Failed to install Noto fonts")
-    def install_noto_font():
-        # Detect Linux distribution type
-        if os.path.exists('/etc/debian_version'):
-            # Debian/Ubuntu systems
-            cmd = ['sudo', 'apt-get', 'install', '-y', 'fonts-noto']
-            pkg_manager = "apt-get"
-        elif os.path.exists('/etc/redhat-release'):
-            # RHEL/CentOS/Fedora systems
-            cmd = ['sudo', 'yum', 'install', '-y', 'google-noto*']
-            pkg_manager = "yum"
-        else:
-            console.print("Warning: Unrecognized Linux distribution, please install Noto fonts manually", style="yellow")
-            return
-
-        subprocess.run(cmd, check=True)
-        console.print(f"✅ Successfully installed Noto fonts using {pkg_manager}", style="green")
-
-    if platform.system() == 'Linux':
-        install_noto_font()
-    
-    install_requirements()
-    check_ffmpeg()
-    
-    # First panel with installation complete and startup command
-    panel1_text = (
-        t("Installation completed") + "\n\n" +
-        t("Now I will run this command to start the application:") + "\n" +
-        "[bold]streamlit run st.py[/bold]\n" +
-        t("Note: First startup may take up to 1 minute")
-    )
-    console.print(Panel(panel1_text, style="bold green"))
-
-    # Second panel with troubleshooting tips
-    panel2_text = (
-        t("If the application fails to start:") + "\n" +
-        "1. " + t("Check your network connection") + "\n" +
-        "2. " + t("Re-run the installer: [bold]python install.py[/bold]")
-    )
-    console.print(Panel(panel2_text, style="yellow"))
-
-    # start the application
-    subprocess.Popen(["streamlit", "run", "st.py"])
+    try:
+        install_core_dependencies()
+        console.print(Panel("Installation Completed! 🎉", title="Success", style="bold green"))
+        subprocess.Popen(["streamlit", "run", "st.py", "--server.fileWatcherType", "none"])
+    except Exception as e:
+        console.print(Panel(f"Installation Failed: {e}", title="Error", style="bold red"))
 
 if __name__ == "__main__":
     main()
