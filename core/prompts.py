@@ -1,10 +1,80 @@
 import json
 from core.utils import *
 
+# ==============================================================================
+# [Chess Logic] Domain Knowledge Base
+# ==============================================================================
+CHESS_INSTRUCTION = """
+<Domain Specific Rule>
+**CRITICAL INSTRUCTION**: Check if the text content is about **International Chess**. 
+If (and ONLY if) it is about Chess, you MUST strictly follow these terminology rules:
+
+1. **Piece Mapping (Standard Chinese)**:
+   - King = 王 (not 国王)
+   - Queen = 后 (not 王后)
+   - Rook = 车 (not 城堡)
+   - Bishop = 象 (not 主教)
+   - Knight = 马 (not 骑士)
+   - Pawn = 兵 (not 卒/典当)
+   - Piece = 棋子/子力 (not 碎片/块)
+
+2. **Opening Names (Standard Translation Table)**:
+   - "Sicilian" -> 西西里防御
+   - "Ruy Lopez" / "Spanish" -> 西班牙开局
+   - "Italian Game" -> 意大利开局
+   - "Caro-Kann" -> 卡罗-卡恩防御
+   - "French Defense" -> 法兰西防御
+   - "Scandinavian" -> 斯堪的纳维亚防御
+   - "Pirc Defense" -> 皮尔茨防御
+   - "Alekhine" -> 阿廖欣防御
+   - "King's Indian" -> 古印度防御
+   - "Queen's Indian" -> 新印度防御
+   - "Nimzo-Indian" -> 尼姆佐维奇防御
+   - "Grunfeld" -> 格林菲尔德防御
+   - "Benoni" -> 别诺尼防御
+   - "Dutch Defense" -> 荷兰防御
+   - "English Opening" -> 英国式开局
+   - "Reti Opening" -> 列蒂开局
+   - "Catalan" -> 卡塔兰开局
+   - "London System" -> 伦敦体系
+   - "Smith-Morra" -> 史密斯-莫拉弃兵
+   - "Wilkes-Barre" -> 威尔克斯-巴雷弃兵
+   - "Evans Gambit" -> 伊文斯弃兵
+   - "Scotch Game" -> 苏格兰开局
+   - "Philidor" -> 菲利道尔防御
+   - "Petrov" / "Russian" -> 俄罗斯防御
+
+3. **General Terminology**:
+   - "Gambit" -> 弃兵
+   - "Variation" -> 变例
+   - "Line" -> 线路/变化
+   - "Mate" / "Checkmate" -> 将死
+   - "Check" -> 将军
+   - "Castling" -> 王车易位
+   - "Development" -> 出子
+   - "Sacrifice" -> 弃子
+   - "Exchange" -> 交换
+   - "Advantage" -> 优势
+   - "Blunder" -> 大漏着/败着
+
+4. **Notation Rule**:
+   - KEEP algebraic notation (e.g., "e4", "Nf3", "Bxc5", "O-O", "h3") **EXACTLY AS IS**. 
+   - Do NOT translate or expand them.
+   - "White" = 白方, "Black" = 黑方.
+
+5. **Anti-Hallucination Protocol (Strict Enforcement)**:
+   - **Unknown Terms**: If you encounter an opening name or proper noun NOT listed above, you MUST **Transliterate it phonetically** (音译). 
+   - **Universal Ban on Substitution**: Do **NOT** replace unknown terms with **ANY** other existing Chess Opening names. 
+     - (e.g. Do NOT swap an unknown word with "Queen's Gambit", "King's Gambit", "Slav Defense", or ANY other famous term just to make the sentence sound smooth).
+   - **Accuracy Priority**: It is strictly forbidden to fabricate a chess term. If you don't know it, spell it out by sound (e.g., "Wall-broke" -> "瓦尔布罗克").
+</Domain Specific Rule>
+"""
+
 ## ================================================================
 # @ step4_splitbymeaning.py
 def get_split_prompt(sentence, num_parts = 2, word_limit = 20):
     language = load_key("whisper.detected_language")
+    # 使用拼接方式避免 Markdown 渲染中断
     split_prompt = f"""
 ## Role
 You are a professional Netflix subtitle splitter in **{language}**.
@@ -16,6 +86,7 @@ Split the given subtitle text into **{num_parts}** parts, each less than **{word
 2. MOST IMPORTANT: Keep parts roughly equal in length (minimum 3 words each)
 3. Split at natural points like punctuation marks or conjunctions
 4. If provided text is repeated words, simply split at the middle of the repeated words.
+5. **CRITICAL**: Do NOT split inside specific technical notations (e.g., Chess moves like "1. e4", "Nf3"). Keep them distinct.
 
 ## Steps
 1. Analyze the sentence structure, complexity, and key splitting challenges
@@ -29,24 +100,19 @@ Split the given subtitle text into **{num_parts}** parts, each less than **{word
 </split_this_sentence>
 
 ## Output in only JSON format and no other text
-```json
-{{
+""" + """```json
+{
     "analysis": "Brief description of sentence structure, complexity, and key splitting challenges",
     "split1": "First splitting approach with [br] tags at split positions",
     "split2": "Alternative splitting approach with [br] tags at split positions",
     "assess": "Comparison of both approaches highlighting their strengths and weaknesses",
     "choice": "1 or 2"
-}}
-```
+}
+```""" + f"""
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
 """.strip()
     return split_prompt
-
-"""{{
-    "analysis": "Brief analysis of the text structure",
-    "split": "Complete sentence with [br] tags at split positions"
-}}"""
 
 ## ================================================================
 # @ step4_1_summarize.py
@@ -74,12 +140,16 @@ For the provided {src_lang} video text:
 
 {terms_note}
 
+{CHESS_INSTRUCTION}
+
 Steps:
 1. Topic Summary:
    - Quick scan for general understanding
    - Write two sentences: first for main topic, second for key point
 2. Term Extraction:
    - Mark professional terms and names (excluding those listed in Existing Terms)
+   - **IF Chess Content**: Extract Opening Names (e.g. Sicilian) and Tactics (e.g. Pin/Fork) as terms.
+   - **IMPORTANT**: Do NOT extract standard moves (e.g. "e4", "Nf3") as terms.
    - Provide {tgt_lang} translation or keep original
    - Add brief explanation
    - Extract less than 15 terms
@@ -97,24 +167,18 @@ Steps:
       "src": "{src_lang} term",
       "tgt": "{tgt_lang} translation or original", 
       "note": "Brief explanation"
-    }},
-    ...
+    }}
   ]
 }}  
 
 ## Example
 {{
-  "theme": "本视频介绍人工智能在医疗领域的应用现状。重点展示了AI在医学影像诊断和药物研发中的突破性进展。",
+  "theme": "本视频介绍国际象棋开局策略。重点讲解了针对1.e4的防御体系。",
   "terms": [
     {{
-      "src": "Machine Learning",
-      "tgt": "机器学习",
-      "note": "AI的核心技术，通过数据训练实现智能决策"
-    }},
-    {{
-      "src": "CNN",
-      "tgt": "CNN",
-      "note": "卷积神经网络，用于医学图像识别的深度学习模型"
+      "src": "Sicilian Defense",
+      "tgt": "西西里防御",
+      "note": "黑方应对1.e4最激烈的防御手段"
     }}
   ]
 }}
@@ -143,7 +207,6 @@ def generate_shared_prompt(previous_content_prompt, after_content_prompt, summar
 
 def get_prompt_faithfulness(lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
-    # Split lines by \n
     line_splits = lines.split('\n')
     
     json_dict = {}
@@ -166,9 +229,11 @@ We have a segment of original {src_language} subtitles that need to be directly 
 
 {shared_prompt}
 
+{CHESS_INSTRUCTION}
+
 <translation_principles>
 1. Faithful to the original: Accurately convey the content and meaning of the original text, without arbitrarily changing, adding, or omitting content.
-2. Accurate terminology: Use professional terms correctly and maintain consistency in terminology.
+2. Accurate terminology: Use professional terms correctly and maintain consistency in terminology. **If Chess content is detected, STRICTLY follow the Domain Specific Rule provided above.**
 3. Understand the context: Fully comprehend and reflect the background and contextual relationships of the text.
 </translation_principles>
 
@@ -178,9 +243,9 @@ We have a segment of original {src_language} subtitles that need to be directly 
 </subtitles>
 
 ## Output in only JSON format and no other text
-```json
+''' + f'''```json
 {json_format}
-```
+```''' + '''
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
 '''
@@ -218,18 +283,21 @@ Your task is to reflect on and improve these direct translations to create more 
 
 {shared_prompt}
 
+{CHESS_INSTRUCTION}
+
 <Translation Analysis Steps>
 Please use a two-step thinking process to handle the text line by line:
 
 1. Direct Translation Reflection:
    - Evaluate language fluency
    - Check if the language style is consistent with the original text
-   - Check the conciseness of the subtitles, point out where the translation is too wordy
+   - **Chess Check**: Ensure terms like "Knight" are "马" (not 骑士), and "Piece" is "棋子" (not 碎片/和平).
+   - Check the conciseness of the subtitles.
 
 2. {TARGET_LANGUAGE} Free Translation:
    - Aim for contextual smoothness and naturalness, conforming to {TARGET_LANGUAGE} expression habits
    - Ensure it's easy for {TARGET_LANGUAGE} audience to understand and accept
-   - Adapt the language style to match the theme (e.g., use casual language for tutorials, professional terminology for technical content, formal language for documentaries)
+   - **Tone**: If Chess, keep it professional, concise, and instructional. Use "白方/黑方" instead of "白色/黑色".
 </Translation Analysis Steps>
    
 ## INPUT
@@ -238,9 +306,9 @@ Please use a two-step thinking process to handle the text line by line:
 </subtitles>
 
 ## Output in only JSON format and no other text
-```json
+''' + f'''```json
 {json_format}
-```
+```''' + '''
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
 '''
@@ -275,6 +343,7 @@ Your task is to create the best splitting scheme for the {targ_lang} subtitles b
 2. Split the {targ_lang} subtitles according to the pre-processed {src_lang} split version
 3. Never leave empty lines. If it's difficult to split based on meaning, you may appropriately rewrite the sentences that need to be aligned
 4. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
+5. **Chess Notation Rule**: Never split a chess move notation (e.g. "1. e4") across two subtitle lines.
 
 ## INPUT
 <subtitles>
@@ -284,14 +353,14 @@ Pre-processed {src_lang} Subtitles ([br] indicates split points): {src_part}
 </subtitles>
 
 ## Output in only JSON format and no other text
-```json
+''' + f'''```json
 {{
     "analysis": "Brief analysis of word order, structure, and semantic correspondence between two subtitles",
     "align": [
         {align_parts_json}
     ]
 }}
-```
+```''' + '''
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
@@ -320,6 +389,7 @@ Duration: {duration} seconds
 
 ## Processing Rules
 {rule}
+- **CRITICAL for Chess**: DO NOT shorten or modify algebraic notations (e.g., "Nf3", "O-O"). These are critical information.
 
 ## Processing Steps
 Please follow these steps and provide the results in the JSON output:
@@ -327,12 +397,12 @@ Please follow these steps and provide the results in the JSON output:
 2. Trimming: Based on the rules and analysis, optimize the subtitle by making it more concise according to the processing rules.
 
 ## Output in only JSON format and no other text
-```json
-{{
+''' + '''```json
+{
     "analysis": "Brief analysis of the subtitle, including structure, key information, and potential processing locations",
     "result": "Optimized and shortened subtitle in the original subtitle language"
-}}
-```
+}
+```''' + '''
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
@@ -349,16 +419,18 @@ You are a text cleaning expert for TTS (Text-to-Speech) systems.
 Clean the given text by:
 1. Keep only basic punctuation (.,?!)
 2. Preserve the original meaning
+3. **Chess Context**: If text contains chess moves (e.g. "e4"), keep them as is.
 
 ## INPUT
 {text}
 
 ## Output in only JSON format and no other text
-```json
-{{
+''' + '''```json
+{
     "text": "cleaned text here"
-}}
-```
+}
+```''' + '''
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
+    return get_correct_text_prompt
