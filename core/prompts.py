@@ -22,7 +22,7 @@ If (and ONLY if) it is about Chess, you MUST strictly follow these terminology r
    - "Sicilian" -> 西西里防御
    - "Ruy Lopez" / "Spanish" -> 西班牙开局
    - "Italian Game" -> 意大利开局
-   - "Caro-Kann" -> 卡罗-卡恩防御
+   - "Caro-Kann" -> 卡罗康防御
    - "French Defense" -> 法兰西防御
    - "Scandinavian" -> 斯堪的纳维亚防御
    - "Pirc Defense" -> 皮尔茨防御
