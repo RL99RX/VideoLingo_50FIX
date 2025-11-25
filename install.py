@@ -119,37 +119,35 @@ def finalize_environment():
     from rich.panel import Panel
     console = Console()
     
-    console.print(Panel("🛡️ 执行最终环境定型 (Surgical Fix)...", style="magenta"))
+    console.print(Panel("🛡️ 执行最终环境定型 (Smart Constraint)...", style="magenta"))
     
-    # 1. 暴力卸载 Numpy (确保干净)
-    console.print("正在清理 Numpy...")
-    uninstall_package("numpy")
+    # 1. 暴力卸载 Numpy (清除 2.0 版本的残留)
+    console.print("正在清理环境...")
+    uninstall_package("numpy", "spacy", "thinc", "weasel")
     
-    # 2. 强制安装兼容版 Numpy
-    console.print("正在强制锁定 Numpy < 2.0...")
-    install_package("numpy<2.0.0", force=True)
+    # 2. 【关键策略】同时安装 Spacy 和 锁定的 Numpy
+    # 这样 pip 会自动计算依赖，安装 langcodes 等小弟，但绝不会升级 Numpy
+    console.print("正在智能安装 Spacy 生态...")
     
-    # 3. 强制重装 Spacy 全家桶 (补上了 langcodes)
-    console.print("正在强制刷新 Spacy 生态...")
-    uninstall_package("spacy", "thinc", "srsly", "cymem", "preshed", "murmurhash", "blis", "wasabi", "weasel", "typer", "langcodes")
-    
-    spacy_family = [
-        "spacy==3.7.4", "thinc==8.2.3", "srsly==2.4.8", "cymem==2.0.8", 
-        "preshed==3.0.9", "murmurhash==1.0.10", "blis==0.7.11", 
-        "wasabi==1.1.2", "weasel==0.3.4", "typer", 
-        "langcodes", "language_data"  # <--- 本次新增
+    # 这里的技巧是：把 numpy==1.26.4 和 spacy 一起传给 pip
+    # pip 会自动找到 spacy 依赖中兼容 numpy 1.26.4 的版本
+    packages_to_install = [
+        "numpy==1.26.4", 
+        "spacy==3.7.4", 
+        "thinc==8.2.3",
+        "weasel==0.3.4" # 显式指定几个核心包，防止 pip 犯傻
     ]
     
-    # 关键：使用 no_deps 防止它去动 PyTorch 或 Numpy
-    install_package(*spacy_family, no_deps=True, force=True)
+    # 注意：这里把 no_deps 去掉了！让 pip 自动去补全 langcodes, catalogue 等
+    install_package(*packages_to_install, force=True)
     
-    # 4. 补漏
+    # 3. 补漏 (matplotlib)
     install_package("matplotlib")
     
-    # 5. 下载模型
+    # 4. 下载模型
     subprocess.run([sys.executable, "-m", "spacy", "download", "zh_core_web_sm"])
     
-    console.print("[green]✅ 环境修复完成！所有依赖已锁定。[/green]")
+    console.print("[green]✅ 环境修复完成！依赖链已自动修复且锁定。[/green]")
 
 def install_core_dependencies():
     from rich.console import Console
