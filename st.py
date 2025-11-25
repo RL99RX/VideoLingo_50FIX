@@ -1,5 +1,59 @@
+import sys
+import os
+import types
+
+# --- 5060Ti 兼容性补丁 (终极加强版 v4.0) ---
+# 必须在所有其他 import 之前执行！
+print("🔥 应用 RTX 5060Ti 兼容性补丁 (PyTorch/Torchaudio)...")
+
+# 1. 抢先导入并修补 torch.load
+import torch
+_original_load = torch.load
+def patched_load(*args, **kwargs):
+    # 强制允许 weights_only=False，解决新版 PyTorch 加载旧模型报错
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_load(*args, **kwargs)
+torch.load = patched_load
+
+# 2. 抢先导入并修补 torchaudio
+import torchaudio
+
+# 补丁 2.1: 伪造被删除的 torchaudio.backend 模块
+# 很多旧库 (如 pyannote) 会尝试 import torchaudio.backend.common
+if "torchaudio.backend" not in sys.modules:
+    mock_backend = types.ModuleType("torchaudio.backend")
+    mock_common = types.ModuleType("torchaudio.backend.common")
+    
+    class MockAudioMetaData:
+        def __init__(self, sample_rate, num_frames, num_channels, bits_per_sample, encoding):
+            self.sample_rate = sample_rate
+            self.num_frames = num_frames
+            self.num_channels = num_channels
+            self.bits_per_sample = bits_per_sample
+            self.encoding = encoding
+            
+    mock_common.AudioMetaData = MockAudioMetaData
+    mock_backend.common = mock_common
+    
+    # 注入系统模块列表，骗过后续的 import
+    sys.modules["torchaudio.backend"] = mock_backend
+    sys.modules["torchaudio.backend.common"] = mock_common
+
+# 补丁 2.2: 伪造被删除的老函数
+# 只要库里没有这些函数，就原地造一个假的
+if not hasattr(torchaudio, "set_audio_backend"): 
+    torchaudio.set_audio_backend = lambda backend: None
+if not hasattr(torchaudio, "get_audio_backend"): 
+    torchaudio.get_audio_backend = lambda: "soundfile"
+if not hasattr(torchaudio, "list_audio_backends"): 
+    torchaudio.list_audio_backends = lambda: ["soundfile"]
+
+print("✅ 兼容性补丁应用完成。")
+# --- 补丁结束 ---
+
+# 正常的 import 开始
 import streamlit as st
-import os, sys
 from core.st_utils.imports_and_utils import *
 from core import *
 
@@ -12,6 +66,9 @@ st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
 
 SUB_VIDEO = "output/output_sub.mp4"
 DUB_VIDEO = "output/output_dub.mp4"
+
+# ... (下面的代码保持不变，这里省略以节省篇幅) ...
+# ... 请把你原文件中从 def text_processing_section(): 开始的内容完整保留 ...
 
 def text_processing_section():
     st.header(t("b. Translate and Generate Subtitles"))
@@ -116,6 +173,14 @@ def main():
     with st.sidebar:
         page_setting()
         st.markdown(give_star_button, unsafe_allow_html=True)
+        
+        # 🟢 增加：手动上传文件保存逻辑 (防止上传后没反应)
+        # 这部分代码在你提供的原文件里没有，建议加上以防万一
+        # video_file = st.file_uploader("📁 上传本地视频", type=['mp4', 'mov', 'avi', 'mkv', 'webm'])
+        # if video_file is not None:
+        #     # ... 保存逻辑 ...
+        #     pass
+
     download_video_section()
     text_processing_section()
     audio_processing_section()
