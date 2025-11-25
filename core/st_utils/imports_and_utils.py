@@ -1,4 +1,48 @@
 import os
+import sys
+import platform
+# ... 其他 imports ...
+
+# --- 5060Ti 兼容性补丁 (全局注入版) ---
+import torchaudio
+import types
+import torch
+
+# 1. 补丁：解决 PyTorch 2.6+ 权重加载安全报错
+_original_load = torch.load
+def patched_load(*args, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_load(*args, **kwargs)
+torch.load = patched_load
+
+# 2. 补丁：伪造 torchaudio.backend 模块
+if "torchaudio.backend" not in sys.modules:
+    mock_backend = types.ModuleType("torchaudio.backend")
+    mock_common = types.ModuleType("torchaudio.backend.common")
+    class MockAudioMetaData:
+        def __init__(self, sample_rate, num_frames, num_channels, bits_per_sample, encoding):
+            self.sample_rate = sample_rate
+            self.num_frames = num_frames
+            self.num_channels = num_channels
+            self.bits_per_sample = bits_per_sample
+            self.encoding = encoding
+    mock_common.AudioMetaData = MockAudioMetaData
+    mock_backend.common = mock_common
+    sys.modules["torchaudio.backend"] = mock_backend
+    sys.modules["torchaudio.backend.common"] = mock_common
+
+# 3. 补丁：伪造老函数
+if not hasattr(torchaudio, "set_audio_backend"): 
+    torchaudio.set_audio_backend = lambda backend: None
+if not hasattr(torchaudio, "get_audio_backend"): 
+    torchaudio.get_audio_backend = lambda: "soundfile"
+if not hasattr(torchaudio, "list_audio_backends"): 
+    torchaudio.list_audio_backends = lambda: ["soundfile"]
+
+print("🔥 全局兼容性补丁已应用 (VideoLingo 50Fix)")
+# --- 补丁结束 ---
+import os
 import streamlit as st
 import io, zipfile
 from core.st_utils.download_video_section import download_video_section
