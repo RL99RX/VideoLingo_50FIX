@@ -113,7 +113,7 @@ def install_smart_requirements():
         finally:
             os.remove(tmp_path)
 
-ddef finalize_environment():
+def finalize_environment():
     """【核心逻辑】执行最终的环境补全和定型"""
     from rich.console import Console
     from rich.panel import Panel
