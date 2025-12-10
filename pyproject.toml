@@ -5,17 +5,27 @@ description = "VideoLingo with RTX 50 Series Support"
 readme = "README.md"
 requires-python = "==3.11.*"
 dependencies = [
+    # --- 基础工具 ---
+    "pip",
+    "matplotlib",  # [新增] 修复 pyannote.audio 缺包报错
+    
     # --- 核心深度学习框架 (RTX 50 fix) ---
-    "torch==2.6.0",
-    "torchaudio==2.6.0",
-    "torchvision",
+    "torch>=2.6.0.dev",
+    "torchaudio>=2.6.0.dev",
+    "torchvision>=0.21.0.dev",
     
     # --- 核心依赖限制 ---
     "numpy==1.26.4",
     "spacy==3.7.4",
     
+    # [新增] 强行指定 Spacy 中文模型下载地址，解决 404 问题
+    "zh_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_sm-3.7.0/zh_core_web_sm-3.7.0-py3-none-any.whl",
+    
     # --- 修复 ONNX Runtime ---
     "onnxruntime==1.19.2",
+
+    # --- 修复 GPU 检测 ---
+    "nvidia-ml-py",
 
     # --- 之前冲突的包 ---
     "demucs @ git+https://github.com/adefossez/demucs",
@@ -51,29 +61,18 @@ dependencies = [
 ]
 
 [tool.uv]
-# 允许跨源寻找最佳版本 (解决 openai 依赖问题)
 index-strategy = "unsafe-best-match"
 
-# 核心魔法：强制覆盖依赖版本 (解决编译报错的终极方案)
+# 核心魔法：强制覆盖依赖版本
 override-dependencies = [
-    # 1. 锁定 PyTorch 以支持 RTX 50
-    "torch==2.6.0",
-    "torchaudio==2.6.0",
-    
-    # 2. 锁定 Numpy 以兼容旧版库
+    "torch>=2.6.0.dev",
+    "torchaudio>=2.6.0.dev",
     "numpy==1.26.4",
-    
-    # 3. 锁定 ONNX 以获得 Windows 支持
     "onnxruntime==1.19.2",
-    
-    # 4. 【关键】强制使用有预编译包的新版 av，跳过编译步骤
     "av==13.1.0",
-    
-    # 5. 【配合】升级 faster-whisper 以兼容新版 av
     "faster-whisper==1.1.0"
 ]
 
-# 配置 Nightly 源下载 RTX 50 支持包
 [[tool.uv.index]]
 name = "pytorch-nightly"
 url = "https://download.pytorch.org/whl/nightly/cu128"

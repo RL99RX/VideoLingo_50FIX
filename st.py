@@ -1,55 +1,61 @@
 import sys
 import os
 import types
+import torch 
 
-# --- 5060Ti 兼容性补丁 (终极加强版 v4.0) ---
-# 必须在所有其他 import 之前执行！
-print("🔥 应用 RTX 5060Ti 兼容性补丁 (PyTorch/Torchaudio)...")
+# --- 5060Ti 兼容性补丁 (终极加强版 v4.1 - 静默模式) ---
+# 使用标记防止 Streamlit Rerun 时重复打补丁刷屏
+if not hasattr(torch, "_videolingo_patched"):
+    print("🔥 应用 RTX 5060Ti 兼容性补丁 (PyTorch/Torchaudio)...")
 
-# 1. 抢先导入并修补 torch.load
-import torch
-_original_load = torch.load
-def patched_load(*args, **kwargs):
-    # 强制允许 weights_only=False，解决新版 PyTorch 加载旧模型报错
-    if 'weights_only' not in kwargs:
-        kwargs['weights_only'] = False
-    return _original_load(*args, **kwargs)
-torch.load = patched_load
+    # 1. 抢先导入并修补 torch.load
+    _original_load = torch.load
+    def patched_load(*args, **kwargs):
+        # 强制允许 weights_only=False，解决新版 PyTorch 加载旧模型报错
+        if 'weights_only' not in kwargs:
+            kwargs['weights_only'] = False
+        return _original_load(*args, **kwargs)
+    torch.load = patched_load
 
-# 2. 抢先导入并修补 torchaudio
-import torchaudio
+    # 2. 抢先导入并修补 torchaudio
+    import torchaudio
 
-# 补丁 2.1: 伪造被删除的 torchaudio.backend 模块
-# 很多旧库 (如 pyannote) 会尝试 import torchaudio.backend.common
-if "torchaudio.backend" not in sys.modules:
-    mock_backend = types.ModuleType("torchaudio.backend")
-    mock_common = types.ModuleType("torchaudio.backend.common")
-    
-    class MockAudioMetaData:
-        def __init__(self, sample_rate, num_frames, num_channels, bits_per_sample, encoding):
-            self.sample_rate = sample_rate
-            self.num_frames = num_frames
-            self.num_channels = num_channels
-            self.bits_per_sample = bits_per_sample
-            self.encoding = encoding
-            
-    mock_common.AudioMetaData = MockAudioMetaData
-    mock_backend.common = mock_common
-    
-    # 注入系统模块列表，骗过后续的 import
-    sys.modules["torchaudio.backend"] = mock_backend
-    sys.modules["torchaudio.backend.common"] = mock_common
+    # 补丁 2.1: 伪造被删除的 torchaudio.backend 模块
+    # 很多旧库 (如 pyannote) 会尝试 import torchaudio.backend.common
+    if "torchaudio.backend" not in sys.modules:
+        mock_backend = types.ModuleType("torchaudio.backend")
+        mock_common = types.ModuleType("torchaudio.backend.common")
+        
+        class MockAudioMetaData:
+            def __init__(self, sample_rate, num_frames, num_channels, bits_per_sample, encoding):
+                self.sample_rate = sample_rate
+                self.num_frames = num_frames
+                self.num_channels = num_channels
+                self.bits_per_sample = bits_per_sample
+                self.encoding = encoding
+                
+        mock_common.AudioMetaData = MockAudioMetaData
+        mock_backend.common = mock_common
+        
+        # 注入系统模块列表，骗过后续的 import
+        sys.modules["torchaudio.backend"] = mock_backend
+        sys.modules["torchaudio.backend.common"] = mock_common
 
-# 补丁 2.2: 伪造被删除的老函数
-# 只要库里没有这些函数，就原地造一个假的
-if not hasattr(torchaudio, "set_audio_backend"): 
-    torchaudio.set_audio_backend = lambda backend: None
-if not hasattr(torchaudio, "get_audio_backend"): 
-    torchaudio.get_audio_backend = lambda: "soundfile"
-if not hasattr(torchaudio, "list_audio_backends"): 
-    torchaudio.list_audio_backends = lambda: ["soundfile"]
+    # 补丁 2.2: 伪造被删除的老函数
+    # 只要库里没有这些函数，就原地造一个假的
+    if not hasattr(torchaudio, "set_audio_backend"): 
+        torchaudio.set_audio_backend = lambda backend: None
+    if not hasattr(torchaudio, "get_audio_backend"): 
+        torchaudio.get_audio_backend = lambda: "soundfile"
+    if not hasattr(torchaudio, "list_audio_backends"): 
+        torchaudio.list_audio_backends = lambda: ["soundfile"]
 
-print("✅ 兼容性补丁应用完成。")
+    # 打上标记，下次不再运行
+    torch._videolingo_patched = True
+    print("✅ 兼容性补丁应用完成。")
+else:
+    # 静默跳过
+    pass
 # --- 补丁结束 ---
 
 # 正常的 import 开始
@@ -66,9 +72,6 @@ st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
 
 SUB_VIDEO = "output/output_sub.mp4"
 DUB_VIDEO = "output/output_dub.mp4"
-
-# ... (下面的代码保持不变，这里省略以节省篇幅) ...
-# ... 请把你原文件中从 def text_processing_section(): 开始的内容完整保留 ...
 
 def text_processing_section():
     st.header(t("b. Translate and Generate Subtitles"))
