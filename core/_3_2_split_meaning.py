@@ -1,81 +1,68 @@
 import concurrent.futures
-from difflib import SequenceMatcher
 import math
+import json
+from rich.console import Console
+from rich.table import Table
 from core.prompts import get_split_prompt
 from core.spacy_utils.load_nlp_model import init_nlp
 from core.utils import *
-from rich.console import Console
-from rich.table import Table
 from core.utils.models import _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING
+
 console = Console()
 
 def tokenize_sentence(sentence, nlp):
     doc = nlp(sentence)
     return [token.text for token in doc]
 
-def find_split_positions(original, modified):
-    split_positions = []
-    parts = modified.split('[br]')
-    start = 0
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
-    joiner = get_joiner(language)
-
-    for i in range(len(parts) - 1):
-        max_similarity = 0
-        best_split = None
-
-        for j in range(start, len(original)):
-            original_left = original[start:j]
-            modified_left = joiner.join(parts[i].split())
-
-            left_similarity = SequenceMatcher(None, original_left, modified_left).ratio()
-
-            if left_similarity > max_similarity:
-                max_similarity = left_similarity
-                best_split = j
-
-        if max_similarity < 0.9:
-            console.print(f"[yellow]Warning: low similarity found at the best split point: {max_similarity}[/yellow]")
-        if best_split is not None:
-            split_positions.append(best_split)
-            start = best_split
-        else:
-            console.print(f"[yellow]Warning: Unable to find a suitable split point for the {i+1}th part.[/yellow]")
-
-    return split_positions
-
 def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0):
-    """Split a long sentence using GPT and return the result as a string."""
+    """
+    Split a long sentence using GPT and return the result as a string joined by newline.
+    Now optimized to expect a JSON list directly from LLM.
+    """
     split_prompt = get_split_prompt(sentence, num_parts, word_limit)
+    
     def valid_split(response_data):
-        choice = response_data["choice"]
-        if f'split{choice}' not in response_data:
+        if "split" not in response_data:
             return {"status": "error", "message": "Missing required key: `split`"}
-        if "[br]" not in response_data[f"split{choice}"]:
-            return {"status": "error", "message": "Split failed, no [br] found"}
+        if not isinstance(response_data["split"], list):
+            return {"status": "error", "message": "Key `split` must be a list"}
+        if len(response_data["split"]) < 2:
+             # 如果模型认为不需要切分，返回列表长度为1，这其实不算错误，但我们需要确认行为
+             # 这里我们允许，后续逻辑会处理
+             return {"status": "success", "message": "Split list valid"}
         return {"status": "success", "message": "Split completed"}
     
-    response_data = ask_gpt(split_prompt + " " * retry_attempt, resp_type='json', valid_def=valid_split, log_title='split_by_meaning')
-    choice = response_data["choice"]
-    best_split = response_data[f"split{choice}"]
-    split_points = find_split_positions(sentence, best_split)
-    # split the sentence based on the split points
-    for i, split_point in enumerate(split_points):
-        if i == 0:
-            best_split = sentence[:split_point] + '\n' + sentence[split_point:]
-        else:
-            parts = best_split.split('\n')
-            last_part = parts[-1]
-            parts[-1] = last_part[:split_point - split_points[i-1]] + '\n' + last_part[split_point - split_points[i-1]:]
-            best_split = '\n'.join(parts)
+    # 调用 LLM
+    response_data = ask_gpt(
+        split_prompt + " " * retry_attempt, 
+        resp_type='json', 
+        valid_def=valid_split, 
+        log_title='split_by_meaning'
+    )
+    
+    # 直接获取分割好的列表
+    split_parts = response_data["split"]
+    
+    # 简单的拼接逻辑：用换行符连接
+    best_split = '\n'.join(split_parts)
+    
+    # 验证完整性（可选警告）：检查切分后的文本长度是否和原句差异过大（防止漏词）
+    # 这里只做简单的控制台提示，不阻断流程
+    cleaned_original = sentence.replace(" ", "")
+    cleaned_split = best_split.replace("\n", "").replace(" ", "")
+    # 注意：LLM有时会微调标点，所以这里不强制报错，只在差异巨大时警告
+    if abs(len(cleaned_original) - len(cleaned_split)) > 10:
+        console.print(f"[yellow]Warning: Split length mismatch for sentence {index}[/yellow]")
+
     if index != -1:
         console.print(f'[green]✅ Sentence {index} has been successfully split[/green]')
+    
+    # 打印表格展示结果
     table = Table(title="")
     table.add_column("Type", style="cyan")
     table.add_column("Sentence")
     table.add_row("Original", sentence, style="yellow")
-    table.add_row("Split", best_split.replace('\n', ' ||'), style="yellow")
+    table.add_row("Split", best_split.replace('\n', ' || '), style="yellow")
     console.print(table)
     
     return best_split
@@ -89,22 +76,28 @@ def parallel_split_sentences(sentences, max_length, max_workers, nlp, retry_atte
         for index, sentence in enumerate(sentences):
             # Use tokenizer to split the sentence
             tokens = tokenize_sentence(sentence, nlp)
-            # print("Tokenization result:", tokens)
-            num_parts = math.ceil(len(tokens) / max_length)
+            
+            # Decide if splitting is needed
             if len(tokens) > max_length:
+                num_parts = math.ceil(len(tokens) / max_length)
                 future = executor.submit(split_sentence, sentence, num_parts, max_length, index=index, retry_attempt=retry_attempt)
                 futures.append((future, index, num_parts, sentence))
             else:
                 new_sentences[index] = [sentence]
 
         for future, index, num_parts, sentence in futures:
-            split_result = future.result()
-            if split_result:
-                split_lines = split_result.strip().split('\n')
-                new_sentences[index] = [line.strip() for line in split_lines]
-            else:
+            try:
+                split_result = future.result()
+                if split_result:
+                    split_lines = split_result.strip().split('\n')
+                    new_sentences[index] = [line.strip() for line in split_lines]
+                else:
+                    new_sentences[index] = [sentence]
+            except Exception as e:
+                console.print(f"[red]Error processing sentence {index}: {e}[/red]")
                 new_sentences[index] = [sentence]
 
+    # Flatten the list
     return [sentence for sublist in new_sentences for sentence in sublist]
 
 @check_file_exists(_3_2_SPLIT_BY_MEANING)
@@ -117,7 +110,13 @@ def split_sentences_by_meaning():
     nlp = init_nlp()
     # 🔄 process sentences multiple times to ensure all are split
     for retry_attempt in range(3):
-        sentences = parallel_split_sentences(sentences, max_length=load_key("max_split_length"), max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)
+        sentences = parallel_split_sentences(
+            sentences, 
+            max_length=load_key("max_split_length"), 
+            max_workers=load_key("max_workers"), 
+            nlp=nlp, 
+            retry_attempt=retry_attempt
+        )
 
     # 💾 save results
     with open(_3_2_SPLIT_BY_MEANING, 'w', encoding='utf-8') as f:
@@ -125,5 +124,6 @@ def split_sentences_by_meaning():
     console.print('[green]✅ All sentences have been successfully split![/green]')
 
 if __name__ == '__main__':
+    # test case
     # print(split_sentence('Which makes no sense to the... average guy who always pushes the character creation slider all the way to the right.', 2, 22))
     split_sentences_by_meaning()
