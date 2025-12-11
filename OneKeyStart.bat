@@ -1,22 +1,45 @@
 @echo off
+setlocal
+chcp 65001 >nul
+title VideoLingo Launcher
 
-:: Set TorchAudio environment variable to suppress warnings
-set TORCHAUDIO_USE_BACKEND_DISPATCHER=1
+echo ========================================================
+echo        VideoLingo Launcher (Universal Mode)
+echo ========================================================
+echo.
 
-:: GPU Detection and Environment Setup
-echo Detecting GPU type...
-nvidia-smi --query-gpu=name --format=csv,noheader,nounits > gpu_info.tmp 2>nul
-if exist gpu_info.tmp (
-    findstr /i "RTX 50" gpu_info.tmp >nul
-    if not errorlevel 1 (
-        echo RTX 50 Series GPU detected, setting compatibility variables...
-        set TORCH_CUDA_ARCH_LIST=7.0 7.5 8.0 8.6 8.9 9.0+PTX
-        set NVIDIA_ALLOW_UNSUPPORTED_ARCHS=true
-        echo Environment variables set successfully
-    )
-    del gpu_info.tmp
+:: 1. Check uv
+echo [INFO] Checking uv...
+uv --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [WARN] uv not found, installing...
+    python -m pip install uv
 )
 
-call conda activate videolingo
-python -m streamlit run st.py
+:: 2. Config & Install
+echo [INFO] Environment Check...
+:: 使用 --no-project 确保 install.py 可以自由修改环境而不受 lock 文件限制
+uv run --no-project install.py
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Installation failed.
+    pause
+    exit /b
+)
+
+:: 3. Patches
+echo.
+echo [INFO] Checking patches...
+:: 关键！必须加 --no-project，否则 uv 会试图把 torch 降级回去！
+if exist "fix_cudnn.py" uv run --no-project python fix_cudnn.py
+if exist "fix_whisperx.py" uv run --no-project python fix_whisperx.py
+
+:: 4. Start
+echo.
+echo [INFO] Starting VideoLingo...
+set HF_ENDPOINT=https://hf-mirror.com
+:: 同样加 --no-project，保持当前“魔改”后的环境状态运行
+uv run --no-project streamlit run st.py
+
 pause

@@ -1,79 +1,62 @@
 [project]
 name = "videolingo"
-version = "2.0.0"
-description = "VideoLingo with RTX 50 Series Support"
+version = "3.0.0"
+description = "VideoLingo: 连接世界的每一帧"
 readme = "README.md"
-requires-python = "==3.11.*"
+requires-python = ">=3.10, <3.12"
+
+# === 核心依赖列表 (只保留通用库) ===
 dependencies = [
-    # --- 基础工具 ---
-    "pip",
-    "matplotlib",  # [新增] 修复 pyannote.audio 缺包报错
-    
-    # --- 核心深度学习框架 (RTX 50 fix) ---
-    "torch>=2.6.0.dev",
-    "torchaudio>=2.6.0.dev",
-    "torchvision>=0.21.0.dev",
-    
-    # --- 核心依赖限制 ---
     "numpy==1.26.4",
-    "spacy==3.7.4",
-    
-    # [新增] 强行指定 Spacy 中文模型下载地址，解决 404 问题
-    "zh_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_sm-3.7.0/zh_core_web_sm-3.7.0-py3-none-any.whl",
-    
-    # --- 修复 ONNX Runtime ---
-    "onnxruntime==1.19.2",
-
-    # --- 修复 GPU 检测 ---
-    "nvidia-ml-py",
-
-    # --- 之前冲突的包 ---
-    "demucs @ git+https://github.com/adefossez/demucs",
-    "whisperx @ git+https://github.com/m-bain/whisperx.git@7307306a9d8dd0d261e588cc933322454f853853",
-
-    # --- 其他常规依赖 ---
-    "librosa==0.10.2.post1",
-    "pytorch-lightning==2.3.3",
-    "lightning==2.3.3",
-    "transformers==4.39.3",
-    "moviepy==1.0.3",
-    "openai==1.55.3",
-    "opencv-python==4.10.0.84",
-    "openpyxl==3.1.5",
     "pandas==2.2.3",
-    "pydub==0.25.1",
-    "PyYAML==6.0.2",
+    "scipy",
+    "matplotlib", 
+    "openai==1.55.3",
     "replicate==0.33.0",
     "requests==2.32.3",
+    "httpx",
+    "transformers==4.39.3",
+    "moviepy==1.0.3",
+    "librosa==0.10.2.post1",
+    "soundfile",
+    "pydub==0.25.1",
+    "opencv-python==4.10.0.84",
     "resampy==0.4.3",
     "streamlit==1.38.0",
     "yt-dlp",
-    "json-repair",
+    "rich",
     "ruamel.yaml",
-    "InquirerPy",
+    "json-repair",
+    "inquirerpy",
     "autocorrect-py",
-    "ctranslate2==4.4.0",
-    "edge-tts",
+    "openpyxl==3.1.5",
+    "pyyaml==6.0.2",
+    "spacy==3.7.4",
     "syllables",
     "pypinyin",
     "g2p-en",
     "xmltodict",
+    "edge-tts",
+    "pytorch-lightning==2.3.3",
+    "lightning==2.3.3",
+    "nvidia-ml-py",
+    "demucs @ git+https://github.com/adefossez/demucs",
+    # --- Spacy Models ---
+    "en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.7.0/en_core_web_lg-3.7.0-py3-none-any.whl",
+    "zh_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_lg-3.7.0/zh_core_web_lg-3.7.0-py3-none-any.whl",
+    # --- 关键工具 ---
+    "pip",
 ]
+
+# === 语言包 ===
+[project.optional-dependencies]
+ja = ["ja_core_news_md @ https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.7.0/ja_core_news_md-3.7.0-py3-none-any.whl"]
+ru = ["ru_core_news_md @ https://github.com/explosion/spacy-models/releases/download/ru_core_news_md-3.7.0/ru_core_news_md-3.7.0-py3-none-any.whl"]
+fr = ["fr_core_news_md @ https://github.com/explosion/spacy-models/releases/download/fr_core_news_md-3.7.0/fr_core_news_md-3.7.0-py3-none-any.whl"]
+es = ["es_core_news_md @ https://github.com/explosion/spacy-models/releases/download/es_core_news_md-3.7.0/es_core_news_md-3.7.0-py3-none-any.whl"]
+de = ["de_core_news_md @ https://github.com/explosion/spacy-models/releases/download/de_core_news_md-3.7.0/de_core_news_md-3.7.0-py3-none-any.whl"]
+it = ["it_core_news_md @ https://github.com/explosion/spacy-models/releases/download/it_core_news_md-3.7.0/it_core_news_md-3.7.0-py3-none-any.whl"]
+all_langs = ["videolingo[ja,ru,fr,es,de,it]"]
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
-
-# 核心魔法：强制覆盖依赖版本
-override-dependencies = [
-    "torch>=2.6.0.dev",
-    "torchaudio>=2.6.0.dev",
-    "numpy==1.26.4",
-    "onnxruntime==1.19.2",
-    "av==13.1.0",
-    "faster-whisper==1.1.0"
-]
-
-[[tool.uv.index]]
-name = "pytorch-nightly"
-url = "https://download.pytorch.org/whl/nightly/cu128"
-explicit = false
