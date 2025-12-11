@@ -44,18 +44,25 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     
     if device == "cuda":
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        # --- 修改开始 ---
-        # 激进策略：直接给 32。5060Ti (8G/16G) 跑 fp16 应该都能抗住。
-        # 如果爆显存了，就改回 16。
-        batch_size = 32 
-        # --- 修改结束 ---
         
+        # --- ⚖️ 动态 Batch Size 均衡策略 ---
+        if gpu_mem > 14:
+            batch_size = 32  # 16GB+ 显存 (如 4090, 4080, 5060Ti 16G)
+        elif gpu_mem > 7:
+            batch_size = 16  # 8GB+ 显存 (主流甜点卡，最稳妥的选择)
+        elif gpu_mem > 5:
+            batch_size = 8   # 6GB 显存 (如 2060, 3060 Laptop)
+        else:
+            batch_size = 4   # <6GB 显存 (老卡保命模式)
+        # ----------------------------------
+
         compute_type = "float16" if torch.cuda.is_bf16_supported() else "int8"
-        rprint(f"[cyan]🎮 GPU memory:[/cyan] {gpu_mem:.2f} GB, [cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}")
+        rprint(f"[cyan]🎮 GPU memory:[/cyan] {gpu_mem:.2f} GB, [cyan]📦 Auto Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}")
     else:
         batch_size = 1
         compute_type = "int8"
         rprint(f"[cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}")
+    
     rprint(f"[green]▶️ Starting WhisperX for segment {start:.2f}s to {end:.2f}s...[/green]")
     
     if WHISPER_LANGUAGE == 'zh':
@@ -71,15 +78,20 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     else:
         rprint(f"[green]📥 Using WHISPER model from HuggingFace:[/green] {model_name} ...")
 
-    vad_options = {"vad_onset": 0.500,"vad_offset": 0.363}
-    asr_options = {"temperatures": [0],"initial_prompt": "",}
+    # VAD 参数
+    vad_options = {"vad_onset": 0.500, "vad_offset": 0.363}
+    asr_options = {"temperatures": [0], "initial_prompt": ""}
+    
     whisper_language = None if 'auto' in WHISPER_LANGUAGE else WHISPER_LANGUAGE
     rprint("[bold yellow] You can ignore warning of `Model was trained with torch 1.10.0+cu102, yours is 2.0.0+cu118...`[/bold yellow]")
+    
+    # 加载模型
     model = whisperx.load_model(model_name, device, compute_type=compute_type, language=whisper_language, vad_options=vad_options, asr_options=asr_options, download_root=MODEL_DIR)
 
     def load_audio_segment(audio_file, start, end):
         audio, _ = librosa.load(audio_file, sr=16000, offset=start, duration=end - start, mono=True)
         return audio
+
     raw_audio_segment = load_audio_segment(raw_audio_file, start, end)
     vocal_audio_segment = load_audio_segment(vocal_audio_file, start, end)
     
@@ -88,7 +100,10 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # -------------------------
     transcribe_start_time = time.time()
     rprint("[bold green]Note: You will see Progress if working correctly ↓[/bold green]")
+    
+    # 执行转录
     result = model.transcribe(raw_audio_segment, batch_size=batch_size, print_progress=True)
+    
     transcribe_time = time.time() - transcribe_start_time
     rprint(f"[cyan]⏱️ time transcribe:[/cyan] {transcribe_time:.2f}s")
 
@@ -105,9 +120,11 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # 2. align by vocal audio
     # -------------------------
     align_start_time = time.time()
+    
     # Align timestamps using vocal audio
     model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
     result = whisperx.align(result["segments"], model_a, metadata, vocal_audio_segment, device, return_char_alignments=False)
+    
     align_time = time.time() - align_start_time
     rprint(f"[cyan]⏱️ time align:[/cyan] {align_time:.2f}s")
 
