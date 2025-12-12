@@ -4,16 +4,10 @@ import subprocess
 import shutil
 
 # ==========================================
-# 0. 优先清理
-# ==========================================
-if os.path.exists("pyproject.toml"):
-    try: os.remove("pyproject.toml")
-    except: pass
-
-# ==========================================
 # 1. 基础配置 (通用库)
 # ==========================================
 BASE_DEPENDENCIES = [
+    "pip",  # <--- [关键修复] 显式添加 pip，否则 uv 环境无法运行 python -m pip
     "pandas==2.2.3",
     "scipy",
     "matplotlib", 
@@ -49,7 +43,6 @@ BASE_DEPENDENCIES = [
     "demucs @ git+https://github.com/adefossez/demucs",
     "en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.7.0/en_core_web_lg-3.7.0-py3-none-any.whl",
     "zh_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_lg-3.7.0/zh_core_web_lg-3.7.0-py3-none-any.whl"
-    # 移除了 "pip"，uv 不需要它
 ]
 
 OPTIONAL_DEPENDENCIES = """
@@ -102,15 +95,13 @@ CONFIGS = {
         "index": [
             {"name": "pytorch-nightly", "url": "https://download.pytorch.org/whl/nightly/cu128"}
         ],
-        # === 关键修复点 ===
-        # 强制覆盖所有冲突依赖，包括 ctranslate2
         "overrides": [
             "faster-whisper==1.1.0", 
             "numpy<2",
             "torch>=2.6.0.dev",
             "torchaudio>=2.6.0.dev",
             "torchvision>=0.21.0.dev",
-            "ctranslate2>=4.5.0"  # <--- 必须加这行，否则 whisperx 会锁死 4.4.0
+            "ctranslate2>=4.5.0"
         ]
     }
 }
@@ -126,17 +117,41 @@ def run_cmd(cmd, check=True):
     print(f"   [EXEC] {' '.join(cmd)}")
     subprocess.run(cmd, check=check, shell=(os.name=='nt'))
 
-def generate_pyproject(mode):
-    if os.path.exists("pyproject.toml"):
-        try: os.remove("pyproject.toml")
+def get_current_mode():
+    if os.path.exists(".current_mode"):
+        try:
+            with open(".current_mode", "r") as f:
+                return f.read().strip()
         except: pass
+    return None
 
-    log(f"正在构建 {mode} 模式的依赖配置...", "INFO")
+def set_current_mode(mode):
+    with open(".current_mode", "w") as f:
+        f.write(mode)
+
+def ensure_config():
+    """确保 config.yaml 存在"""
+    if os.path.exists("config.yaml"):
+        return
+
+    log("检测到 config.yaml 缺失，正在初始化配置...", "WARN")
+    if os.path.exists("config.example.yaml"):
+        try:
+            shutil.copy("config.example.yaml", "config.yaml")
+            log("已从 config.example.yaml 创建 config.yaml", "SUCCESS")
+        except Exception as e:
+            log(f"复制配置文件失败: {e}", "FAIL")
+    else:
+        # 如果连 example 都没有，创建一个最小可用配置（防止 crash）
+        log("未找到模板，正在创建默认 config.yaml...", "WARN")
+        with open("config.yaml", "w", encoding="utf-8") as f:
+            f.write("# Auto-generated config\n")
+            f.write("spacy_model_map:\n  en: en_core_web_lg\n  zh: zh_core_web_lg\n")
+
+def generate_pyproject(mode):
+    log(f"正在配置 {mode} 模式的依赖...", "INFO")
     
     config = CONFIGS[mode]
-    
-    # === 优化点：不再强行绑定 sys_platform ===
-    # uv sync 默认针对当前环境解析，保持依赖列表纯净
     final_deps = BASE_DEPENDENCIES + config["deps"]
     
     deps_str = "[\n    " + ",\n    ".join([f'"{d}"' for d in final_deps]) + "\n]"
@@ -169,7 +184,6 @@ index-strategy = "unsafe-best-match"
 {override_str}
 {index_section}
 """
-
     with open("pyproject.toml", "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -182,8 +196,11 @@ def detect_gpu():
     return "stable"
 
 def main():
-    print(f"{Colors.GREEN}=== VideoLingo 智能安装程序 (v3.1.9) ==={Colors.ENDC}")
+    print(f"{Colors.GREEN}=== VideoLingo 智能安装程序 (v3.1.9 Patch 2) ==={Colors.ENDC}")
     
+    # 0. 先检查配置文件，防止后续 st.py 崩溃
+    ensure_config()
+
     detected_mode = detect_gpu()
     default_opt = "2" if detected_mode == "rtx50" else "1"
     
@@ -206,37 +223,48 @@ def main():
     elif choice == "1": mode = "stable"
     else: mode = detected_mode
     
-    log(f"已锁定模式: {mode}", "INFO")
+    log(f"目标模式: {mode}", "INFO")
 
-    # 总是清理旧的锁文件，因为我们动态修改了 pyproject.toml
-    if os.path.exists("uv.lock"):
-        try:
-            os.remove("uv.lock")
-            log("已自动清理旧锁文件以适应新模式。", "SUCCESS")
-        except Exception as e:
-            log(f"清理锁文件失败: {e}", "WARN")
-
-    target_py = "3.11" if mode == "rtx50" else "3.10"
-    try:
-        # 使用 allow-existing 防止重复 pin 报错
-        run_cmd(["uv", "python", "pin", target_py]) 
-    except Exception as e:
-        log(f"Python 版本锁定警告: {e}", "WARN")
-
+    old_mode = get_current_mode()
+    
+    # 1. 重新生成配置
     generate_pyproject(mode)
+
+    # 2. 状态判断
+    if old_mode != mode:
+        if old_mode is None:
+             log("首次运行，初始化环境...", "INFO")
+        else:
+             log(f"检测到模式切换 ({old_mode} -> {mode})，正在清理旧环境...", "WARN")
+        
+        if os.path.exists("uv.lock"):
+            try: os.remove("uv.lock")
+            except: pass
+        
+        target_py = "3.11" if mode == "rtx50" else "3.10"
+        try:
+            run_cmd(["uv", "python", "pin", target_py], check=False)
+        except Exception as e:
+            log(f"Python 锁定警告: {e}", "WARN")
+            
+        set_current_mode(mode)
+    else:
+        log("模式未变更，保留锁文件。", "SUCCESS")
 
     log("开始同步环境...", "INFO")
     try:
+        # 这次同步会安装 pip，解决后续报错
         run_cmd(["uv", "sync"])
     except subprocess.CalledProcessError:
-        log("uv sync 执行失败，请检查上方红字报错。", "FAIL")
+        log("uv sync 执行失败。", "FAIL")
         sys.exit(1)
 
     if os.path.exists("fix_env.py"):
         log("正在执行环境后处理...", "INFO")
+        # 此时环境里已经有 pip 了，fix_env.py 不会再报错
         run_cmd(["uv", "run", "python", "fix_env.py", "--mode", mode])
     else:
-        log("未找到 fix_env.py，跳过后处理步骤。", "WARN")
+        log("未找到 fix_env.py，跳过后处理。", "WARN")
 
     with open(".install_completed", "w") as f: f.write("ok")
     log("✅ 安装完成！请运行: uv run st.py", "SUCCESS")

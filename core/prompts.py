@@ -203,7 +203,8 @@ def generate_shared_prompt(previous_content_prompt, after_content_prompt, summar
 def get_prompt_faithfulness(lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
     
-    line_splits = lines.split('\n')
+    # 使用 strip 防止末尾空行导致的计数错误
+    line_splits = lines.strip().split('\n')
     input_json = {}
     for i, line in enumerate(line_splits, 1):
         input_json[f"{i}"] = {"origin": line}
@@ -214,8 +215,15 @@ You are an expert **Chess Translator**.
 Your expertise lies in accurately understanding International Chess terminology and converting it faithfully to {TARGET_LANGUAGE}.
 
 ## Task
-1. Translate line by line.
-2. **Context Check**: Use the provided context to resolve pronouns (He vs It) and ambiguous terms (Rank/File).
+1. Translate line by line based on the JSON index.
+2. **Context Check**: Use the provided context to resolve pronouns, BUT NEVER REPEAT CONTEXT.
+
+## 🛡️ CRITICAL ANTI-HALLUCINATION RULES
+1. **NO REPETITION**: Do NOT repeat the translation of the previous line. If the current line is a repetition of the previous line in source, translate it again. But if the source is different, the translation MUST be different.
+2. **HANDLE SHORT/EMPTY LINES**: 
+   - If a line is empty, noise, or just a filler word (e.g., "Um", "Ah", "00:00:12"), output an empty string "" or "...".
+   - **NEVER** fill silence with text from the previous line.
+3. **Keep Notation**: "e4", "Nf3" must remain unchanged.
 
 {shared_prompt}
 

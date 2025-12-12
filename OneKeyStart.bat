@@ -18,7 +18,9 @@ if %errorlevel% neq 0 (
 
 :: 2. Config & Install
 echo [INFO] Environment Check...
-:: 使用 --no-project 确保 install.py 可以自由修改环境而不受 lock 文件限制
+:: === 优化点在这里 ===
+:: 以前是: uv run install.py (慢，因为要先加载虚拟环境)
+:: 现在是: python install.py (快，直接用系统python运行配置脚本)
 uv run --no-project install.py
 
 if %errorlevel% neq 0 (
@@ -31,15 +33,15 @@ if %errorlevel% neq 0 (
 :: 3. Patches
 echo.
 echo [INFO] Checking patches...
-:: 关键！必须加 --no-project，否则 uv 会试图把 torch 降级回去！
-if exist "fix_cudnn.py" uv run --no-project python fix_cudnn.py
-if exist "fix_whisperx.py" uv run --no-project python fix_whisperx.py
+:: 补丁仍然需要用 uv run，因为它们依赖 venv 里的库
+if exist "fix_cudnn.py" uv run python fix_cudnn.py
+if exist "fix_whisperx.py" uv run python fix_whisperx.py
 
 :: 4. Start
 echo.
 echo [INFO] Starting VideoLingo...
 set HF_ENDPOINT=https://hf-mirror.com
-:: 同样加 --no-project，保持当前“魔改”后的环境状态运行
-uv run --no-project streamlit run st.py
+:: 启动主程序必须用 uv run
+uv run streamlit run st.py
 
 pause
