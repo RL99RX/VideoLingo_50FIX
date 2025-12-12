@@ -22,13 +22,20 @@ def split_chunks_by_chars(chunk_size, max_i):
     chunk = ''
     sentence_count = 0
     for sentence in sentences:
+        # 如果当前 chunk 加上新句子会超长，或者句子数量达到上限 -> 先保存旧的，再开启新的
         if len(chunk) + len(sentence + '\n') > chunk_size or sentence_count == max_i:
+            if chunk:  # 确保不保存空块
+                chunks.append(chunk.strip())
             chunk = sentence + '\n'
             sentence_count = 1
         else:
             chunk += sentence + '\n'
             sentence_count += 1
+            
+    # 循环结束后，别忘了保存最后剩下的那个 chunk
+    if chunk:
         chunks.append(chunk.strip())
+        
     return chunks
 
 # Get context from surrounding chunks
