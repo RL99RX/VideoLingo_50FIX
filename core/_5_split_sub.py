@@ -37,15 +37,24 @@ def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], Lis
         if 'align' not in response_data:
             return {"status": "error", "message": "Missing required key: `align`"}
         if len(response_data['align']) < 2:
-            return {"status": "error", "message": "Align does not contain more than 1 part as expected!"}
+            return {"status": "success", "message": "Align completed (single part)"}
         return {"status": "success", "message": "Align completed"}
+    
     parsed = ask_gpt(align_prompt, resp_type='json', valid_def=valid_align, log_title='align_subs')
+    
     align_data = parsed['align']
     src_parts = src_part.split('\n')
-    tr_parts = [item[f'target_part_{i+1}'].strip() for i, item in enumerate(align_data)]
+    
+    try:
+        tr_parts = [item['target_part'].strip() for item in align_data]
+    except KeyError:
+        tr_parts = []
+        for i, item in enumerate(align_data):
+            val = item.get('target_part') or item.get(f'target_part_{i+1}') or ""
+            tr_parts.append(val.strip())
 
-    # bugfix: if the src_parts and tr_parts have different lengths, merge them into one part
     if len(src_parts) != len(tr_parts):
+        console.print(f"[yellow]⚠️ Alignment mismatch: {len(src_parts)} src vs {len(tr_parts)} trans. Merging back.[/yellow]")
         src_parts = ["\n".join(src_parts)]
         tr_parts = ["\n".join(tr_parts)]
     
@@ -83,16 +92,25 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]):
     
     @except_handler("Error in split_align_subs")
     def process(i):
-        split_src = split_sentence(src_lines[i], num_parts=2).strip()
+        src_line_clean = src_lines[i].replace('\n', ' ')
+        split_src = split_sentence(src_line_clean, num_parts=2).strip()
+        
+        if split_src == src_line_clean:
+             return 
+
         src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
         src_lines[i] = src_parts
         tr_lines[i] = tr_parts
         remerged_tr_lines[i] = tr_remerged
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
+    # === 关键修改：解除硬性限制，完全尊重 config.yaml 配置 ===
+    # 之前是: max_workers = min(load_key("max_workers"), 5)
+    # 现在改为:
+    max_workers = load_key("max_workers")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         executor.map(process, to_split)
     
-    # Flatten `src_lines` and `tr_lines`
     src_lines = [item for sublist in src_lines for item in (sublist if isinstance(sublist, list) else [sublist])]
     tr_lines = [item for sublist in tr_lines for item in (sublist if isinstance(sublist, list) else [sublist])]
     
@@ -109,19 +127,22 @@ def split_for_sub_main():
     MAX_SUB_LENGTH = subtitle_set["max_length"]
     TARGET_SUB_MULTIPLIER = subtitle_set["target_multiplier"]
     
-    for attempt in range(3):  # 多次切割
+    for attempt in range(3):
         console.print(Panel(f"🔄 Split attempt {attempt + 1}", expand=False))
+        len_before = len(src)
+        
         split_src, split_trans, remerged = split_align_subs(src.copy(), trans)
         
-        # 检查是否所有字幕都符合长度要求
-        if all(len(src) <= MAX_SUB_LENGTH for src in split_src) and \
-           all(calc_len(tr) * TARGET_SUB_MULTIPLIER <= MAX_SUB_LENGTH for tr in split_trans):
-            break
-        
-        # 更新源数据继续下一轮分割
-        src, trans = split_src, split_trans
+        if len(split_src) == len_before:
+             console.print("[yellow]⚠️ No more splits possible or needed.[/yellow]")
+             break
 
-    # 确保二者有相同的长度，防止报错
+        src, trans = split_src, split_trans
+        
+        if all(len(str(s)) <= MAX_SUB_LENGTH for s in src) and \
+           all(calc_len(str(t)) * TARGET_SUB_MULTIPLIER <= MAX_SUB_LENGTH for t in trans):
+            break
+
     if len(src) > len(remerged):
         remerged += [None] * (len(src) - len(remerged))
     elif len(remerged) > len(src):

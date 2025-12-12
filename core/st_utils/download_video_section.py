@@ -53,7 +53,8 @@ def download_video_section():
                 
                 raw_name = uploaded_file.name.replace(' ', '_')
                 name, ext = os.path.splitext(raw_name)
-                clean_name = re.sub(r'[^\w\-_\.]', '', name) + ext.lower()
+                # 改进逻辑：将非白名单字符替换为下划线 '_'
+                clean_name = re.sub(r'[^\w\-_\.]', '_', name) + ext.lower()
                     
                 with open(os.path.join(OUTPUT_DIR, clean_name), "wb") as f:
                     f.write(uploaded_file.getbuffer())

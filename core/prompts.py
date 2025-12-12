@@ -2,38 +2,42 @@ import json
 from core.utils import *
 
 # ==============================================================================
-# [Grandmaster Edition] Domain Knowledge Base (Instructional Video Specialized)
+# [Version C++ Dynamic] Domain Knowledge Base (Intelligent Logic Edition)
 # ==============================================================================
 
-CHESS_INSTRUCTION = """<Chess Instruction Standards>
-You are translating an **International Chess Instructional Video** (Analysis/Lecture).
-Your target audience is chess learners. 
-**Goal**: Accuracy > Creativity. The viewer wants to learn chess concepts, not read poetry.
+# 防止网页渲染截断
+J_START = "```json"
+J_END = "```"
 
-**I. STRICT PIECE MAPPING (Non-negotiable)**
-- King = 王 (Not 国王)
-- Queen = 后 (Not 王后/女王)
-- Rook = 车 (Sound: Ju. Not 城堡/岩石)
-- Bishop = 象 (Not 主教)
-- Knight = 马 (Not 骑士/爵士)
-- Pawn = 兵 (Not 卒/典当)
-- Piece = 棋子 (When referring to units on board) | Material = 子力 (Total value)
+# 1. 核心术语规则 (保持不变，这是硬知识)
+STATIC_CHESS_RULES = """
+<Chess Terminology Standards>
+**I. STRICT PIECE MAPPING**
+- King = 王, Queen = 后, Rook = 车, Bishop = 象, Knight = 马, Pawn = 兵.
+- Piece = 棋子.
 
-**II. CONTEXT-AWARE LOGIC (Crucial)**
-1. **'Rank'**:
-   - DEFAULT: **'横线'** (Board geometry, rows 1-8). e.g., 'Back rank' -> '底线'.
-   - EXCEPTION: If followed by 'Player', 'Grandmaster', 'World', 'Top' -> **'排名'**.
-2. **'File'**:
-   - DEFAULT: **'直线'** (Board columns a-h). e.g., 'Open file' -> '开放线', 'C-file' -> 'C线'.
-   - EXCEPTION: If referring to PGN/Data/Computer -> **'文件'**.
-3. **'Promotion'**: **升变** (Not 晋升/促销).
-4. **'Mate'**: **将死** (Not 伙伴/配偶). 'Checkmate' -> '将死'. 'Check' -> '将军'.
-5. **Pronouns (The 'He' Trap)**: 
-   - When referring to a Piece (Knight/Bishop/Rook): Translate 'He/She' as **'它'** or repeat the piece name.
-   - When referring to a Player/Opponent: Translate 'He' as **'他'**.
+**II. TACTICAL CONCEPTS (CRITICAL)**
+- **"Gain a move" / "Extra move"** -> 抢先 / 得先 / 赚取时差 (**ABSOLUTELY FORBIDDEN**: "多走一步").
+- "Tempo" -> 先手 / 节奏.
+- **"Deflect"** -> 引离.
+- "Decoy" -> 引入.
+- "Fork" -> 捉双 (Context: if targeting King & Rook -> "王车双击").
+- "Pin" -> 牵制.
+- "Skewer" -> 串击.
+- "Discovered Attack" -> 闪击.
+- **"Intermediate move"** -> 中间着 (Unified).
+- "Blunder" -> 败着 / 大漏勺.
+- "Sacrifice" -> 弃子.
+- "Exchange" -> 交换.
+- "Material" -> 子力.
 
-**III. OPENING NAMES DICTIONARY**
-*Rule: Only use these if the specific name is CLEARLY audible or phonetically similar.*
+**III. CONTEXT AWARENESS**
+- "Rank" = 横线 (board) vs 排名 (player).
+- "File" = 直线 (board) vs 文件 (file).
+- "White/Black" = 白方/黑方.
+- "Mate" = 杀棋 / 杀招.
+
+**IV. OPENING NAMES DICTIONARY (FULL)**
 - Sicilian -> 西西里防御
 - Ruy Lopez / Spanish -> 西班牙开局
 - Italian Game -> 意大利开局
@@ -42,8 +46,6 @@ Your target audience is chess learners.
 - Scandinavian -> 斯堪的纳维亚防御
 - Pirc -> 皮尔茨防御
 - Alekhine -> 阿廖欣防御
-
-# 印度防御系列
 - King's Indian -> 古印度防御
 - Queen's Indian -> 新印度防御
 - Nimzo-Indian -> 尼姆佐-印度防御
@@ -51,11 +53,9 @@ Your target audience is chess learners.
 - Benoni -> 别诺尼防御
 - Dutch -> 荷兰防御
 - English Opening -> 英国式开局
-- Reti -> 列蒂开局 (WARNING: Do NOT confuse with 'Ready')
+- Reti -> 列蒂开局 
 - Catalan -> 卡塔兰开局
 - London System -> 伦敦体系
-
-# 弃兵系列 (Specific Rules First!)
 - Queen's Gambit -> 后翼弃兵
 - King's Gambit -> 王翼弃兵
 - Evans Gambit -> 伊文斯弃兵
@@ -63,352 +63,248 @@ Your target audience is chess learners.
 - Scotch -> 苏格兰开局
 - Vienna Gambit -> 维也纳弃兵
 - Vienna -> 维也纳开局
-# 新增修正项
 - Walbrodt-Baird Gambit -> 瓦尔布罗德-贝尔德弃兵
 - Mueller Gambit -> 穆勒弃兵
-
 - Petrov / Russian -> 俄罗斯防御
 - Trompowsky -> 特罗姆波夫斯基攻击
 - Slav -> 斯拉夫防御
-- Bird's Opening -> 伯德开局 (WARNING: Do NOT confuse with 'Bad')
+- Bird's Opening -> 伯德开局
+</Chess Terminology Standards>
+"""
 
-**IV. SPECIAL FIXES & ASR ERROR HANDLING**
-1. **Castle / Castling**: **王车易位** (Default).
-   - Context: Even if the grammar is odd (e.g., 'weapons are castle'), it refers to the move '王车易位'.
-2. **Phonetic Recovery Strategy (Anti-Hallucination)**:
-   - **Issue**: ASR often misinterprets rare names as random words (e.g., 'Wall-broke bared' -> 'Walbrodt-Baird').
-   - **Action**: Check the Dictionary for sound-alikes first.
-   - **Fallback**: If not in dictionary, use **Sound Transliteration** (音译). 
-   - **Prohibition**: NEVER translate literal meanings of broken words if they don't make sense (e.g., 'Bared' != 裸露, likely 'Baird' -> '贝尔德').
+# 2. 字幕风格与逻辑约束 (代词逻辑彻底通用化)
+SUBTITLE_CONSTRAINTS = """
+<Subtitle Style Guidelines>
+1. **Role**: You are an **Expert Chess Commentator**. 
 
-**V. ACTION VERBS**
-- 'Sacrifice' -> 弃子
-- 'Exchange' -> 交换 (The Exchange -> 得半子)
-- 'Fork' -> 捉双 | 'Pin' -> 牵制 | 'Skewer' -> 串击
-- 'Develop' -> 出子 | 'Fianchetto' -> 堡垒象/侧翼出象
-- 'Blunder' -> 恶手/大漏着 | 'Gambit' -> 弃兵
+2. **🛡️ ASR Error Correction Logic (GENERIC)**: 
+   - **Context**: The source text is from speech recognition and contains **phonetic errors** (homophones).
+   - **Rule**: **Logic > Literal**. If a word makes no sense in a Chess context, you MUST infer the intended **phonetically similar** chess term.
+   - **Examples of Logic**:
+     - "Rear lines" (Nonsense) -> sounds like -> "Rare lines" (Chess term: 冷门变化).
+     - "Crunchy move" (Food?) -> sounds like -> "Crushing move" (Chess term: 毁灭性).
+     - "Night f3" (Time?) -> sounds like -> "Knight f3" (Chess piece).
 
-**VI. NOTATION RULE**
-- Keep algebraic moves (e.g., 'e4', 'Nf3', 'O-O', 'Bxc5') EXACTLY as is.
-- If the source is spoken text (e.g., 'Knight to f3'), translate to Chinese term + coord (e.g., '马跳f3' or '马f3').
-</Chess Instruction Standards>
+3. **Dynamic Perspective Logic (Instructional)**:
+   - **Context**: This is an instructional video where the speaker teaches ONE side (The Protagonist) against the other (The Opponent).
+   - **Task**: Dynamically infer which color is the Protagonist based on context (e.g., "We play..." implies the Protagonist).
+   - **Pronoun Rule**:
+     - "He/They" referring to **Protagonist** -> Translate as **"你" (You)** or **"我们" (We)** (Engage the viewer).
+     - "He/They" referring to **Opponent** -> Translate as **"对手" (Opponent)** or **"白方/黑方" (The specific color)**.
+     - **Objective**: Maintain a "Teacher-Student" dialogue, never a "Third-person observer" tone for the main action.
+
+4. **Style & Inference**: 
+   - Use vivid commentary style (e.g., "战火" for conflict).
+   - **Smart Inference**: "Rook in the corner" -> "h8 的车" (if logic fits).
+   - **Clean Stuttering**: Remove repeated words (e.g., 'Bc5... Bc5' -> 'Bc5').
+
+5. **Formatting & Notation**:
+   - **NO** trailing periods.
+   - **Notation Logic**: 
+     - `Nf3` -> "马f3".
+     - `Bc5` -> "象c5".
+     - `Bxc5` -> "象吃c5" or "象c5".
+     - Pawn moves (`e4`) -> "e4" or "冲兵e4".
+
+6. **Syntactical Logic**:
+   - "Take Nc5" -> "吃掉 c5 的马" (Natural Chinese order).
+
+7. **Numerals**:
+   - Moves -> Arabic ("1. e4").
+   - Quantities -> Chinese ("两个兵").
+</Subtitle Style Guidelines>
 """
 
 ## ================================================================
 # @ step4_splitbymeaning.py
 def get_split_prompt(sentence, num_parts=2, word_limit=20):
     language = load_key("whisper.detected_language")
+    json_example = '{\n    "split": [\n        "Part 1 string...",\n        "Part 2 string..."\n    ]\n}'
     
-    prompt_head = f"""## Role
-You are a professional subtitle splitter for Chess Videos in **{language}**.
+    return f"""
+## Role
+You are a Netflix subtitle splitter for Chess content in **{language}**.
 
 ## Task
-Split the text into a **list of {num_parts} parts** (max {word_limit} words each).
+Split the text into a **list of {num_parts} parts**.
 
 ## Critical Rules
-1. **Chess Notation Protection**: NEVER split algebraic notations (e.g., '1. e4', 'Nf3', 'Bxc5'). 
-   - 'Bxc5' cannot be split.
-   - Keep move number with the move: '1. e4' stays together.
-2. **Output Format**: Return a direct List of Strings. Do NOT use tags like [br].
-3. Balance length and meaning.
+1. **Protect Notation**: NEVER split algebraic notations (e.g., "1. e4", "Nf3").
+2. **Format**: Return a direct JSON List of Strings.
 
-## Given Text
-<split_this_sentence>
-{sentence}
-</split_this_sentence>
-"""
-    # 使用拼接避免网页渲染错误
-    prompt_tail = """
+## Input
+"{sentence}"
+
 ## Output Format
-""" + "```json" + """
-{
-    "analysis": "Check for chess notations to protect",
-    "split": [
-        "Split Part 1 string...",
-        "Split Part 2 string..."
-    ]
-}
-""" + "```" + """
-Note: Start you answer with """ + "```json and end with ```" + """, do not add any other text."""
-    
-    return prompt_head + prompt_tail
+Return ONLY JSON.
+{J_START}
+{json_example}
+{J_END}
+""".strip()
 
 ## ================================================================
 # @ step4_1_summarize.py
 def get_summary_prompt(source_content, custom_terms_json=None):
-    src_lang = load_key("whisper.detected_language")
-    
     terms_note = ""
     if custom_terms_json:
-        terms_list = []
-        for term in custom_terms_json['terms']:
-            terms_list.append(f"- {term['src']}: {term['tgt']} ({term['note']})")
-        terms_note = "\n### Existing Terms\nPlease exclude these terms in your extraction:\n" + "\n".join(terms_list)
-    
-    prompt_head = f"""## Role
-You are a Chess Terminology Analyst.
+        terms_str = "\n".join([f"- {t['src']}: {t['tgt']}" for t in custom_terms_json['terms']])
+        terms_note = f"\n### Forbidden Terms (Already Known)\n{terms_str}"
+
+    json_example = '{\n  "theme": "Summary here...",\n  "terms": [\n    { "src": "Term", "tgt": "Translation", "note": "Note" }\n  ]\n}'
+
+    return f"""
+## Role
+You are a Chess Content Analyst.
 
 ## Task
-1. Summarize the video content in two sentences.
-2. **Conservative Term Extraction**:
-   - Extract **Opening Names** ONLY if clearly audible (e.g., 'Sicilian Defense').
-   - Extract **Named Tactics** (e.g., 'Windmill', 'Smothered Mate').
-   - **CRITICAL**: Do NOT extract common moves (e.g., 'e4', 'Nf3') or generic words (e.g., 'Attack', 'Defense') as terms.
-   - **CRITICAL**: If Whisper output is messy/gibberish, IGNORE it. Do not guess terms.
+1. Summarize content in 2 sentences.
+2. Extract **Opening Names** or **Named Tactics**.
+3. **Ignore** common moves (e.g., "e4") or generic terms.
+
+{STATIC_CHESS_RULES}
 {terms_note}
 
-{CHESS_INSTRUCTION}
-
-## INPUT
-<text>
+## Input
 {source_content}
-</text>
-"""
-    prompt_tail = """
+
 ## Output Format
-""" + "```json" + """
-{
-  "theme": "Two-sentence summary",
-  "terms": [
-    {
-      "src": "Source term",
-      "tgt": "Target translation", 
-      "note": "Brief explanation"
-    }
-  ]
-}
-""" + "```" + """
-Note: Start you answer with """ + "```json and end with ```" + """, do not add any other text."""
-    return prompt_head + prompt_tail
+{J_START}
+{json_example}
+{J_END}
+""".strip()
 
 ## ================================================================
-# @ step5_translate.py & translate_lines.py
-def generate_shared_prompt(previous_content_prompt, after_content_prompt, summary_prompt, things_to_note_prompt):
-    return f"""### Context Information
-<previous_content>
-{previous_content_prompt}
-</previous_content>
-**INSTRUCTION**: Use the context to track board state and disambiguate terms (e.g., Is 'Rank' a line or a standing?).
-
-<subsequent_content>
-{after_content_prompt}
-</subsequent_content>
-
-### Content Summary & Terminology
-{summary_prompt}
-
-### Points to Note
-{things_to_note_prompt}"""
-
-def get_prompt_faithfulness(lines, shared_prompt):
-    TARGET_LANGUAGE = load_key("target_language")
+# @ step5_translate.py (BATCH VERSION - CORE)
+def get_batch_translation_prompt(target_lines, context_before, context_after):
+    tgt_lang = load_key("target_language")
     
-    # 使用 strip 防止末尾空行导致的计数错误
-    line_splits = lines.strip().split('\n')
-    input_json = {}
-    for i, line in enumerate(line_splits, 1):
-        input_json[f"{i}"] = {"origin": line}
-    input_dump = json.dumps(input_json, indent=2, ensure_ascii=False)
+    input_data = {
+        "context_previous": context_before,
+        "batch_to_translate": target_lines,
+        "context_next": context_after
+    }
+    input_json = json.dumps(input_data, indent=2, ensure_ascii=False)
+    json_example = '{\n    "translation": [\n        "Translation of line 1",\n        "Translation of line 2"\n    ]\n}'
 
-    prompt_head = f"""## Role
-You are an expert **Chess Translator**.
-Your expertise lies in accurately understanding International Chess terminology and converting it faithfully to {TARGET_LANGUAGE}.
+    return f"""
+## Role
+You are a **Professional Chess Commentator** translating for **{tgt_lang}** audience.
 
 ## Task
-1. Translate line by line based on the JSON index.
-2. **Context Check**: Use the provided context to resolve pronouns, BUT NEVER REPEAT CONTEXT.
+Translate the `batch_to_translate` list.
+Use `context_previous` and `context_next` to understand the board situation, **correct ASR errors**, and infer missing details.
 
-## 🛡️ CRITICAL ANTI-HALLUCINATION RULES
-1. **NO REPETITION**: Do NOT repeat the translation of the previous line. If the current line is a repetition of the previous line in source, translate it again. But if the source is different, the translation MUST be different.
-2. **HANDLE SHORT/EMPTY LINES**: 
-   - If a line is empty, noise, or just a filler word (e.g., "Um", "Ah", "00:00:12"), output an empty string "" or "...".
-   - **NEVER** fill silence with text from the previous line.
-3. **Keep Notation**: "e4", "Nf3" must remain unchanged.
+## Critical Rules
+1. **ONE-TO-ONE MAPPING**: The output list MUST have exactly the same number of lines as the input. 
+   - **DO NOT MERGE LINES**.
+   
+2. **ASR Correction (Logic > Literal)**:
+   - The source contains phonetic errors.
+   - If a word implies a chess impossibility (e.g., "Rear lines", "Peace"), correct it to the phonetic match ("Rare lines", "Piece").
 
-{shared_prompt}
+3. **Dynamic Perspective**:
+   - Determine who is the "Protagonist" (the side being taught).
+   - Translate "He" referring to Protagonist as **"你" (You)** or **"我们" (We)**.
+   - Translate "He" referring to Opponent as **"对手" (Opponent)** or the specific color.
 
-{CHESS_INSTRUCTION}
+4. **Terminology**: 
+   - **"Gained a move"** MUST be "抢先" or "得先".
+   - **"Fork"** -> "捉双".
+   - **"Deflect"** -> "引离".
+   
+5. **Style**: 
+   - Be expressive and vivid.
 
-## INPUT DATA
-The following is the source text to translate:
-""" + "```json" + f"""
-{input_dump}
-""" + "```" + """
-"""
-    prompt_tail = """
+{STATIC_CHESS_RULES}
+{SUBTITLE_CONSTRAINTS}
+
+## Input Data (JSON)
+{J_START}
+{input_json}
+{J_END}
+
 ## Output Format
-Return a JSON object with the 'direct' (Literal Translation) field added.
-""" + "```json" + """
-{
-  "1": {
-    "origin": "source text...",
-    "direct": "literal translation..."
-  }
-}
-""" + "```" + """
-Note: Start you answer with """ + "```json and end with ```" + """, do not add any other text."""
-    
-    return prompt_head + prompt_tail
+Return a JSON object containing ONLY the translated list.
 
-
-def get_prompt_expressiveness(faithfulness_result, lines, shared_prompt):
-    TARGET_LANGUAGE = load_key("target_language")
-    
-    input_data = json.dumps(faithfulness_result, indent=2, ensure_ascii=False)
-
-    prompt_head = f"""## Role
-You are an expert **Chess Translator**.
-You are translating a video for Chinese chess players.
-
-## Goal
-Produce the final, polished subtitle line.
-
-## The Process (Strict Execution)
-For each line, perform two steps:
-
-### Step 1: Reflect (Internal Analysis)
-In the 'reflect' field, you MUST act as a chess critic. Analyze:
-1. **ASR Error Check**: Does the source look like gibberish (e.g., 'Wall-broke bared')? Check if it sounds like a term in the Dictionary (e.g., 'Walbrodt-Baird').
-2. **Ambiguity**: 'Rank' (Row vs Standing)? 'Mate' (Friend vs Checkmate)?
-3. **Logic Check**: Does the translation make sense on a chess board?
-4. **Tone**: Is this a casual chat or a formal lecture?
-5. **Conclusion**: How should I paraphrase this to sound like a native Chinese chess coach?
-
-### Step 2: Free (Final Output)
-In the 'free' field, output **ONLY THE TRANSLATED TEXT**.
-- ❌ DO NOT explain your style.
-- ❌ DO NOT use descriptions.
-- ✅ JUST write the Chinese sentence.
-
-{shared_prompt}
-
-{CHESS_INSTRUCTION}
-
-## INPUT DATA
-""" + "```json" + f"""
-{input_data}
-""" + "```" + """
-"""
-
-    prompt_tail = """
-## Output Format
-Return the JSON with 'reflect' and 'free' fields added.
-""" + "```json" + """
-{
-  "1": {
-    "origin": "He missed a mate in two.",
-    "direct": "他错过了一个配偶在两个里。",
-    "reflect": "'Mate' means Checkmate. 'In two' means 2 moves. Tone: Critical.",
-    "free": "他错过了两步杀。"
-  }
-}
-""" + "```" + """
-Note: Start you answer with """ + "```json and end with ```" + """, do not add any other text."""
-
-    return prompt_head + prompt_tail
+{J_START}
+{json_example}
+{J_END}
+Note: Start with {J_START} and end with {J_END}.
+""".strip()
 
 ## ================================================================
 # @ step6_splitforsub.py
 def get_align_prompt(src_sub, tr_sub, src_part):
     targ_lang = load_key("target_language")
     src_lang = load_key("whisper.detected_language")
-    
-    src_splits = src_part.split('\n')
-    example_list = []
-    for i in range(len(src_splits)):
-        # 内部 JSON 结构，小心转义
-        example_list.append(f'{{"src_part_{i+1}": "Source text...", "target_part_{i+1}": "Aligned target text..."}}')
-    example_json = ",\n        ".join(example_list)
-    
-    src_part_display = src_part.replace('\n', ' [br] ')
+    src_part_display = src_part.replace('\n', ' | ')
+    json_example = '{\n    "align": [\n        { "src_part": "Source 1", "target_part": "Target 1" },\n        { "src_part": "Source 2", "target_part": "Target 2" }\n    ]\n}'
 
-    prompt_head = f"""## Role
-You are a Netflix subtitle alignment expert.
+    return f"""
+## Role
+Subtitle Alignment Expert.
 
 ## Task
-Align and split the {targ_lang} subtitles to match the structure of the {src_lang} source.
+Align the {targ_lang} translation to match the structure of the {src_lang} splits.
 
 ## Rules
-1. **Chess Notation Protection**: NEVER split algebraic notations (e.g., "1. e4", "Nf3") across two lines. They must stay intact.
-2. Analyze word order differences between languages.
-3. Ensure the meaning matches the time segments.
+1. **Notation Protection**: Keep "e4", "Nf3" intact.
+2. **Timing**: Meaning must match.
+3. **No Trailing Periods**.
 
-## INPUT DATA
-<subtitles>
-{src_lang} Original: "{src_sub}"
-{targ_lang} Original: "{tr_sub}"
-Pre-processed {src_lang} Subtitles ([br] indicates split points): {src_part_display}
-</subtitles>
-"""
-    
-    prompt_tail = """
+## Input Data
+Source Full: "{src_sub}"
+Translation Full: "{tr_sub}"
+Split Structure: "{src_part_display}"
+
 ## Output Format
-""" + "```json" + f"""
-{{
-    "analysis": "Brief analysis of alignment strategy",
-    "align": [
-        {example_json}
-    ]
-}}
-""" + "```" + """
-Note: Start you answer with """ + "```json and end with ```" + """, do not add any other text."""
-    
-    return prompt_head + prompt_tail
+{J_START}
+{json_example}
+{J_END}
+""".strip()
 
 ## ================================================================
-# @ step8_gen_audio_task.py @ step10_gen_audio.py
+# @ step8 & step10 (Audio Generation)
 def get_subtitle_trim_prompt(text, duration):
-    rule = """Consider:
-    a. Reducing filler words.
-    b. Omitting unnecessary pronouns."""
+    json_example = '{\n    "result": "Optimized text"\n}'
+    
+    return f"""
+## Role
+Subtitle Editor.
 
-    prompt_head = f"""## Role
-You are a professional subtitle editor.
+## Task
+Shorten the subtitle to fit {duration} seconds.
+1. Remove filler words.
+2. **Keep Chess Moves (e.g. "e4") UNTOUCHED.**
 
-## INPUT
-<subtitles>
-Subtitle: "{text}"
-Duration: {duration} seconds
-</subtitles>
+## Input
+"{text}"
 
-## Processing Rules
-{rule}
-- **CRITICAL for Chess**: 
-  - DO NOT shorten algebraic notations (e.g., "Nf3", "O-O"). 
-  - DO NOT remove "Checkmate" or "Check".
-  - You MAY shorten descriptive text (e.g., "He moves the Knight" -> "He moves Knight").
-"""
-    prompt_tail = """
 ## Output Format
-""" + "```json" + """
-{
-    "analysis": "Brief analysis of length and content type (Chess or General)",
-    "result": "Optimized subtitle"
-}
-""" + "```" + """
-Note: Start you answer with """ + "```json and end with ```" + """, do not add any other text."""
-    return prompt_head + prompt_tail
+{J_START}
+{json_example}
+{J_END}
+""".strip()
 
 ## ================================================================
 # @ tts_main
 def get_correct_text_prompt(text):
-    prompt_head = f"""## Role
-You are a text cleaning expert for TTS.
+    json_example = '{\n    "text": "Cleaned text"\n}'
+    
+    return f"""
+## Role
+Text Cleaner for TTS.
 
 ## Task
-1. Keep basic punctuation (.,?!).
-2. **Chess Check**: If the text contains moves like "e4" or "Nf3", KEEP THEM EXACTLY AS IS. Do not expand them.
-3. Convert non-standard symbols to readable text if necessary, but touch nothing else.
+1. Remove unsupported symbols.
+2. **Keep Chess Moves (e.g., "Nf3") EXACTLY AS IS.**
+3. Pronunciation: Convert "1." to "one dot" ONLY if it helps pronunciation.
 
-## INPUT
-{text}
-"""
-    prompt_tail = """
+## Input
+"{text}"
+
 ## Output Format
-""" + "```json" + """
-{
-    "text": "cleaned text here"
-}
-""" + "```" + """
-Note: Start you answer with """ + "```json and end with ```" + """, do not add any other text."""
-    return prompt_head + prompt_tail
+{J_START}
+{json_example}
+{J_END}
+""".strip()

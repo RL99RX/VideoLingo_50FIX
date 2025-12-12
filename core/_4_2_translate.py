@@ -1,20 +1,32 @@
 import pandas as pd
-import json
 import concurrent.futures
-from core.translate_lines import translate_lines
-from core._4_1_summarize import search_things_to_note_in_prompt
-from core._8_1_audio_task import check_len_then_trim
-from core._6_gen_sub import align_timestamp
-from core.utils import *
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from difflib import SequenceMatcher
-from core.utils.models import *
+
+# 1. 导入核心翻译引擎
+from core.translate_lines import translate_batch_lines
+# 2. 导入必要的常量
+from core.utils.models import _3_2_SPLIT_BY_MEANING, _4_2_TRANSLATION, _2_CLEANED_CHUNKS
+# 3. 导入工具函数
+from core.utils import load_key, check_file_exists
+from core._8_1_audio_task import check_len_then_trim
+from core._6_gen_sub import align_timestamp
+
+# ==============================================================================
+# 关键修复：导入配置文件 (路径常量)
+# ==============================================================================
+try:
+    from core.config import *
+except ImportError:
+    pass
+
 console = Console()
 
-# Function to split text into chunks
+# ==============================================================================
+# 1. 切分逻辑
+# ==============================================================================
 def split_chunks_by_chars(chunk_size, max_i): 
-    """Split text into chunks based on character count, return a list of multi-line text chunks"""
+    """根据字符数限制将文本切分为 chunks"""
     with open(_3_2_SPLIT_BY_MEANING, "r", encoding="utf-8") as file:
         sentences = file.read().strip().split('\n')
 
@@ -22,9 +34,8 @@ def split_chunks_by_chars(chunk_size, max_i):
     chunk = ''
     sentence_count = 0
     for sentence in sentences:
-        # 如果当前 chunk 加上新句子会超长，或者句子数量达到上限 -> 先保存旧的，再开启新的
         if len(chunk) + len(sentence + '\n') > chunk_size or sentence_count == max_i:
-            if chunk:  # 确保不保存空块
+            if chunk:
                 chunks.append(chunk.strip())
             chunk = sentence + '\n'
             sentence_count = 1
@@ -32,87 +43,100 @@ def split_chunks_by_chars(chunk_size, max_i):
             chunk += sentence + '\n'
             sentence_count += 1
             
-    # 循环结束后，别忘了保存最后剩下的那个 chunk
     if chunk:
         chunks.append(chunk.strip())
-        
     return chunks
 
-# Get context from surrounding chunks
-def get_previous_content(chunks, chunk_index):
-    return None if chunk_index == 0 else chunks[chunk_index - 1].split('\n')[-3:] # Get last 3 lines
-def get_after_content(chunks, chunk_index):
-    return None if chunk_index == len(chunks) - 1 else chunks[chunk_index + 1].split('\n')[:2] # Get first 2 lines
+# ==============================================================================
+# 2. Context Helper (上下文获取)
+# ==============================================================================
+def get_context(chunks, index, offset, lines_count):
+    target_idx = index + offset
+    if 0 <= target_idx < len(chunks):
+        chunk_lines = chunks[target_idx].strip().split('\n')
+        if offset < 0: return chunk_lines[-lines_count:] # 上文
+        else: return chunk_lines[:lines_count]           # 下文
+    return []
 
-# 🔍 Translate a single chunk
-def translate_chunk(chunk, chunks, theme_prompt, i):
-    things_to_note_prompt = search_things_to_note_in_prompt(chunk)
-    previous_content_prompt = get_previous_content(chunks, i)
-    after_content_prompt = get_after_content(chunks, i)
-    translation, english_result = translate_lines(chunk, previous_content_prompt, after_content_prompt, things_to_note_prompt, theme_prompt, i)
-    return i, english_result, translation
+# ==============================================================================
+# 3. 任务包装器
+# ==============================================================================
+def process_chunk(chunk, chunks, i):
+    lines = chunk.strip().split('\n')
+    # 获取上下文：前一块的最后3行，后一块的前2行
+    context_before = get_context(chunks, i, -1, 3)
+    context_after = get_context(chunks, i, 1, 2)
+    
+    # 调用核心引擎
+    trans_lines = translate_batch_lines(lines, context_before, context_after, chunk_index=i)
+    
+    return i, lines, trans_lines
 
-# Add similarity calculation function
-def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
-
-# 🚀 Main function to translate all chunks
+# ==============================================================================
+# 4. 主流程
+# ==============================================================================
 @check_file_exists(_4_2_TRANSLATION)
 def translate_all():
-    console.print("[bold green]Start Translating All...[/bold green]")
+    console.print("[bold green]🚀 Start Batch Translation (Version C Engine)...[/bold green]")
+    
+    # 1. 切分任务
     chunks = split_chunks_by_chars(chunk_size=600, max_i=10)
-    with open(_4_1_TERMINOLOGY, 'r', encoding='utf-8') as file:
-        theme_prompt = json.load(file).get('theme')
-
-    # 🔄 Use concurrent execution for translation
+    
+    # 2. 并发执行
+    results = []
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        task = progress.add_task("[cyan]Translating chunks...", total=len(chunks))
+        task = progress.add_task("[cyan]Translating...", total=len(chunks))
+        
         with concurrent.futures.ThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
-            futures = []
-            for i, chunk in enumerate(chunks):
-                future = executor.submit(translate_chunk, chunk, chunks, theme_prompt, i)
-                futures.append(future)
-            results = []
+            futures = [executor.submit(process_chunk, chunk, chunks, i) for i, chunk in enumerate(chunks)]
+            
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
                 progress.update(task, advance=1)
 
-    results.sort(key=lambda x: x[0])  # Sort results based on original order
+    # 3. 结果重组
+    results.sort(key=lambda x: x[0])
     
-    # 💾 Save results to lists and Excel file
-    src_text, trans_text = [], []
-    for i, chunk in enumerate(chunks):
-        chunk_lines = chunk.split('\n')
-        src_text.extend(chunk_lines)
+    all_src = []
+    all_trans = []
+    for _, src, trans in results:
+        all_src.extend(src)
+        all_trans.extend(trans)
         
-        # Calculate similarity between current chunk and translation results
-        chunk_text = ''.join(chunk_lines).lower()
-        matching_results = [(r, similar(''.join(r[1].split('\n')).lower(), chunk_text)) 
-                          for r in results]
-        best_match = max(matching_results, key=lambda x: x[1])
-        
-        # Check similarity and handle exceptions
-        if best_match[1] < 0.9:
-            console.print(f"[yellow]Warning: No matching translation found for chunk {i}[/yellow]")
-            raise ValueError(f"Translation matching failed (chunk {i})")
-        elif best_match[1] < 1.0:
-            console.print(f"[yellow]Warning: Similar match found (chunk {i}, similarity: {best_match[1]:.3f})[/yellow]")
-            
-        trans_text.extend(best_match[0][2].split('\n'))
-    
-    # Trim long translation text
+    # 4. 数据保存 (Excel & SRT)
+    # 读取原始 Whisper 切片用于时间轴对齐
     df_text = pd.read_excel(_2_CLEANED_CHUNKS)
     df_text['text'] = df_text['text'].str.strip('"').str.strip()
-    df_translate = pd.DataFrame({'Source': src_text, 'Translation': trans_text})
-    subtitle_output_configs = [('trans_subs_for_audio.srt', ['Translation'])]
-    df_time = align_timestamp(df_text, df_translate, subtitle_output_configs, output_dir=None, for_display=False)
-    console.print(df_time)
-    # apply check_len_then_trim to df_time['Translation'], only when duration > MIN_TRIM_DURATION.
-    df_time['Translation'] = df_time.apply(lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > load_key("min_trim_duration") else x['Translation'], axis=1)
-    console.print(df_time)
     
+    # --- 关键修复开始 ---
+    # 不要强行对齐 df_text 的长度！因为我们做过句子分割，行数变多是正常的。
+    # 只需确保 Source 和 Translation 一一对应即可。
+    
+    if len(all_src) != len(all_trans):
+        console.print(f"[bold red]❌ Critical Error: Source lines ({len(all_src)}) != Translation lines ({len(all_trans)})[/bold red]")
+        # 兜底：截断到最短长度，防止保存失败
+        min_len = min(len(all_src), len(all_trans))
+        all_src = all_src[:min_len]
+        all_trans = all_trans[:min_len]
+
+    df_translate = pd.DataFrame({'Source': all_src, 'Translation': all_trans})
+    # --- 关键修复结束 ---
+    
+    # 生成带时间轴的 Excel
+    # align_timestamp 会通过文本模糊匹配，将 df_translate(无时间) 映射到 df_text(有时间) 上
+    subtitle_configs = [('trans_subs_for_audio.srt', ['Translation'])]
+    df_time = align_timestamp(df_text, df_translate, subtitle_configs, output_dir=None, for_display=False)
+    
+    # 长度修剪 (Trim)
+    min_dur = load_key("min_trim_duration")
+    df_time['Translation'] = df_time.apply(
+        lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > min_dur else x['Translation'], 
+        axis=1
+    )
+    
+    console.print(df_time)
     df_time.to_excel(_4_2_TRANSLATION, index=False)
-    console.print("[bold green]✅ Translation completed and results saved.[/bold green]")
+    console.print("[bold green]✅ Translation Pipeline Completed![/bold green]")
 
 if __name__ == '__main__':
     translate_all()

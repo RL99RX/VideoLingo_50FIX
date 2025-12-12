@@ -1,106 +1,83 @@
-from core.prompts import generate_shared_prompt, get_prompt_faithfulness, get_prompt_expressiveness
-from rich.panel import Panel
+import json
+import time
 from rich.console import Console
-from rich.table import Table
-from rich import box
-from core.utils import *
+# 1. 正确导入 Prompt 接口
+from core.prompts import get_batch_translation_prompt
+# 2. 动态导入 LLM 调用函数
+try:
+    from core.ask_gpt import ask_gpt
+except ImportError:
+    from core.utils.ask_gpt import ask_gpt
 
 console = Console()
 
-def valid_translate_result(result: dict, required_keys: list, required_sub_keys: list):
-    # 基础格式检查
-    if not all(key in result for key in required_keys):
-        return {"status": "error", "message": f"Missing keys: {', '.join(set(required_keys) - set(result.keys()))}"}
-    for key in result:
-        if not all(sub_key in result[key] for sub_key in required_sub_keys):
-            return {"status": "error", "message": f"Missing sub-keys in {key}: {', '.join(set(required_sub_keys) - set(result[key].keys()))}"}
-    return {"status": "success", "message": "Translation completed"}
-
-def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_to_note_prompt, summary_prompt, index=0):
-    shared_prompt = generate_shared_prompt(previous_content_prompt, after_cotent_prompt, summary_prompt, things_to_note_prompt)
+def translate_batch_lines(lines, context_before, context_after, chunk_index=0):
+    """
+    对一组字幕行进行 Batch 翻译 (Version C + 自动降级)
+    """
+    # ==========================
+    # 策略 1: 尝试批量翻译 (Batch Mode)
+    # ==========================
+    prompt = get_batch_translation_prompt(lines, context_before, context_after)
     
-    # 关键：使用 strip() 确保行数统计准确
-    source_lines = lines.strip().split('\n')
-    line_count = len(source_lines)
+    # 定义验证函数：检查行数是否一致
+    def valid_length(response_data):
+        if 'translation' not in response_data:
+            return {"status": "error", "message": "Missing 'translation' key"}
+        if not isinstance(response_data['translation'], list):
+            return {"status": "error", "message": "'translation' must be a list"}
+        if len(response_data['translation']) != len(lines):
+            return {
+                "status": "error", 
+                "message": f"Length mismatch: Input {len(lines)} vs Output {len(response_data['translation'])}"
+            }
+        return {"status": "success", "message": "Valid"}
 
-    def retry_translation(prompt, length, step_name):
+    try:
+        # 调用 LLM，尝试 2 次 (减少重试次数，避免触发 Rate Limit)
+        # 如果 Batch 失败，尽快降级到串行，不要死磕
+        response = ask_gpt(
+            prompt, 
+            resp_type='json', 
+            valid_def=valid_length, 
+            log_title=f'batch_trans_{chunk_index}'
+        )
+        return response['translation']
+
+    except Exception as e:
+        # 如果 Batch 模式彻底失败（通常是因为模型非要合并行），进入降级模式
+        console.print(f"[bold red]❌ Chunk {chunk_index} Batch failed: {e}[/bold red]")
+        console.print(f"[yellow]🔄 Falling back to Serial Translation (Line-by-Line) for Chunk {chunk_index}...[/yellow]")
+
+    # ==========================
+    # 策略 2: 降级为逐行翻译 (Serial Fallback)
+    # ==========================
+    # 既然批量对齐失败，我们就一行一行翻，虽然慢，但绝对稳。
+    
+    fallback_result = []
+    
+    for i, line in enumerate(lines):
+        # 构造这一行的专属上下文
+        # 上文 = 原始上文 + 本 Batch 中已经在这一行之前的行
+        current_context_before = context_before + lines[:i]
+        # 下文 = 本 Batch 中这一行之后的行 + 原始下文
+        current_context_after = lines[i+1:] + context_after
         
-        # 内部函数：包含重复检测逻辑
-        def valid_faith(response_data):
-            # 1. 检查 Key 是否齐全
-            check = valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['direct'])
-            if check['status'] == 'error': return check
-            
-            # 2. 🛡️ 幻觉检测：检查相邻行是否异常重复
-            # 如果 原文不同(source_lines)，但 译文完全一样(direct)，判定为幻觉
-            for i in range(1, length):
-                curr_trans = response_data[str(i)]['direct'].strip()
-                next_trans = response_data[str(i+1)]['direct'].strip()
-                
-                # 只有当译文长度足够长时才检查，避免简短的 "是"、"对" 被误杀
-                if len(curr_trans) > 5 and curr_trans == next_trans:
-                    curr_src = source_lines[i-1].strip()
-                    next_src = source_lines[i].strip()
-                    # 原文不同，译文却一样 -> 报错重试
-                    if curr_src != next_src:
-                        return {
-                            "status": "error", 
-                            "message": f"🚫 Hallucination detected: Line {i} & {i+1} are identical in translation but different in source."
-                        }
-            return {"status": "success", "message": "Pass"}
-
-        def valid_express(response_data):
-            check = valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['free'])
-            if check['status'] == 'error': return check
-            return {"status": "success", "message": "Pass"}
-
-        for retry in range(3):
-            if step_name == 'faithfulness':
-                result = ask_gpt(prompt + retry * " ", resp_type='json', valid_def=valid_faith, log_title=f'translate_{step_name}')
-            elif step_name == 'expressiveness':
-                result = ask_gpt(prompt + retry * " ", resp_type='json', valid_def=valid_express, log_title=f'translate_{step_name}')
-            
-            if len(result) == length:
-                return result
-            
-            if retry != 2:
-                console.print(f'[yellow]⚠️ {step_name.capitalize()} block {index} retry...[/yellow]')
+        # 构造一个只有 1 行的 Batch Prompt (这就变成了单行翻译)
+        single_prompt = get_batch_translation_prompt([line], current_context_before, current_context_after)
         
-        raise ValueError(f'[red]❌ {step_name.capitalize()} failed after 3 retries.[/red]')
-
-    ## Step 1: Faithful Translation
-    prompt1 = get_prompt_faithfulness(lines, shared_prompt)
-    faith_result = retry_translation(prompt1, line_count, 'faithfulness')
-
-    # 关键修复：手动注入 Origin，防止 Key Error
-    for key in faith_result:
-        faith_result[key]["direct"] = faith_result[key]["direct"].replace('\n', ' ')
-        if key.isdigit():
-            idx = int(key) - 1
-            if 0 <= idx < len(source_lines):
-                faith_result[key]["origin"] = source_lines[idx]
-            else:
-                faith_result[key]["origin"] = ""
-
-    reflect_translate = load_key('reflect_translate')
-    if not reflect_translate:
-        translate_result = "\n".join([faith_result[i]["direct"].strip() for i in faith_result])
-        return translate_result, lines
-
-    ## Step 2: Expressive Translation
-    prompt2 = get_prompt_expressiveness(faith_result, lines, shared_prompt)
-    express_result = retry_translation(prompt2, line_count, 'expressiveness')
-
-    # 打印结果表
-    table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
-    table.add_column("Translations", style="bold")
-    for i, key in enumerate(express_result):
-        table.add_row(f"[cyan]Origin:  {faith_result[key].get('origin', '')}[/cyan]")
-        table.add_row(f"[magenta]Direct:  {faith_result[key]['direct']}[/magenta]")
-        table.add_row(f"[green]Free:    {express_result[key]['free']}[/green]")
-        if i < len(express_result) - 1:
-            table.add_row("[yellow]" + "-" * 50 + "[/yellow]")
-    console.print(table)
-
-    translate_result = "\n".join([express_result[i]["free"].replace('\n', ' ').strip() for i in express_result])
-    return translate_result, lines
+        try:
+            # 这里的 valid_def 依然检查长度（必须是1）
+            single_resp = ask_gpt(
+                single_prompt,
+                resp_type='json',
+                valid_def=lambda r: {"status": "success", "message": ""} if len(r.get('translation', [])) == 1 else {"status": "error", "message": "1:1 check failed"},
+                log_title=f'serial_{chunk_index}_{i}'
+            )
+            fallback_result.extend(single_resp['translation'])
+        except Exception as e_single:
+            console.print(f"[red]❌ Line {i} failed in serial mode: {e_single}. Using source text.[/red]")
+            # 最后的最后，如果单行也翻不出来（极罕见），才用原文兜底
+            fallback_result.append(line)
+            
+    return fallback_result

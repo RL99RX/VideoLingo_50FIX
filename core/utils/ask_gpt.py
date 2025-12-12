@@ -106,7 +106,8 @@ def ask_gpt(prompt, resp_type=None, valid_def=None, log_title="default"):
     try:
         resp_raw = client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": prompt}],
-            response_format=response_format
+            response_format=response_format,
+            temperature=0.3
         )
     except Exception as e:
         raise e # Network error -> Retry
